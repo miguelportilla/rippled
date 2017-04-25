@@ -35,7 +35,7 @@ namespace ripple {
 
 namespace unl { class Manager; }
 namespace Resource { class Manager; }
-namespace NodeStore { class Database; }
+namespace NodeStore { class Database; class DatabaseShard; }
 
 // VFALCO TODO Fix forward declares required for header dependency loops
 class AmendmentTable;
@@ -171,10 +171,12 @@ public:
     virtual AccountIDCache const&   accountIDCache() const = 0;
     virtual OpenLedger&             openLedger() = 0;
     virtual OpenLedger const&       openLedger() const = 0;
-    virtual DatabaseCon& getTxnDB () = 0;
-    virtual DatabaseCon& getLedgerDB () = 0;
+    virtual DatabaseCon&            getTxnDB () = 0;
+    virtual DatabaseCon&            getLedgerDB () = 0;
 
-    virtual std::chrono::milliseconds getIOLatency () = 0;
+    virtual
+    std::chrono::milliseconds
+    getIOLatency () = 0;
 
     virtual bool serverOkay (std::string& reason) = 0;
 

@@ -115,7 +115,6 @@ ManagerImp::find (std::string const& name)
     return *iter;
 }
 
-
 void
 ManagerImp::insert (Factory& factory)
 {

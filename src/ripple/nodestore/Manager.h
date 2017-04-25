@@ -22,6 +22,7 @@
 
 #include <ripple/nodestore/Factory.h>
 #include <ripple/nodestore/DatabaseRotating.h>
+#include <ripple/nodestore/DatabaseShard.h>
 
 namespace ripple {
 namespace NodeStore {

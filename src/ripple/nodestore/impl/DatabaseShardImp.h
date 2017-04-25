@@ -37,6 +37,9 @@ public:
         Scheduler& scheduler, int readThreads, Section const& config,
             beast::Journal journal);
 
+    DatabaseShardImp(NodeStore::Database&, Section const& config,
+        Scheduler& scheduler, beast::Journal journal);
+
     ~DatabaseShardImp() override;
 
     bool
