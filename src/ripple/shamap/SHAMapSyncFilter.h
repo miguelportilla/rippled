@@ -22,6 +22,7 @@
 
 #include <ripple/shamap/SHAMapNodeID.h>
 #include <ripple/shamap/SHAMapTreeNode.h>
+#include <boost/optional.hpp>
 
 /** Callback for filtering SHAMap during sync. */
 namespace ripple {

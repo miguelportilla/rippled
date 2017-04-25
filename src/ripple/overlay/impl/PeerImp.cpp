@@ -32,11 +32,14 @@
 #include <ripple/app/tx/apply.h>
 #include <ripple/basics/random.h>
 #include <ripple/basics/UptimeTimer.h>
+#include <ripple/nodestore/DatabaseShard.h>
+#include <ripple/beast/core/LexicalCast.h>
 #include <ripple/beast/core/SemanticVersion.h>
 #include <ripple/overlay/Cluster.h>
 #include <ripple/protocol/digest.h>
 
 #include <boost/algorithm/string/predicate.hpp>
+#include <boost/algorithm/string.hpp>
 #include <algorithm>
 #include <memory>
 #include <sstream>
@@ -297,8 +300,8 @@ PeerImp::json()
     ledgerRange(minSeq, maxSeq);
 
     if ((minSeq != 0) || (maxSeq != 0))
-        ret[jss::complete_ledgers] = boost::lexical_cast<std::string>(minSeq) +
-            " - " + boost::lexical_cast<std::string>(maxSeq);
+        ret[jss::complete_ledgers] = std::to_string(minSeq) +
+            " - " + std::to_string(maxSeq);
 
     if (closedLedgerHash_ != zero)
         ret[jss::ledger] = to_string (closedLedgerHash_);
@@ -361,8 +364,11 @@ PeerImp::hasLedger (uint256 const& hash, std::uint32_t seq) const
     if ((seq != 0) && (seq >= minLedger_) && (seq <= maxLedger_) &&
             (sanity_.load() == Sanity::sane))
         return true;
-    return std::find (recentLedgers_.begin(),
-        recentLedgers_.end(), hash) != recentLedgers_.end();
+    if (std::find(recentLedgers_.begin(),
+            recentLedgers_.end(), hash) != recentLedgers_.end())
+        return true;
+    return seq != 0 &&
+        boost::icl::contains(shards_, NodeStore::seqToShardIndex(seq));
 }
 
 void
@@ -373,6 +379,24 @@ PeerImp::ledgerRange (std::uint32_t& minSeq,
 
     minSeq = minLedger_;
     maxSeq = maxLedger_;
+}
+
+bool
+PeerImp::hasShard (std::uint32_t shardIndex) const
+{
+    std::lock_guard<std::mutex> sl(recentLock_);
+    return boost::icl::contains(shards_, shardIndex);
+}
+
+std::string
+PeerImp::getShards () const
+{
+    {
+        std::lock_guard<std::mutex> sl(recentLock_);
+        if (!shards_.empty())
+            return to_string(shards_);
+    }
+    return {};
 }
 
 bool
@@ -1348,6 +1372,25 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMStatusChange> const& m)
             minLedger_ = 0;
     }
 
+    if (m->has_shardseqs())
+    {
+        shards_.clear();
+        std::vector<std::string> tokens;
+        boost::split(tokens, m->shardseqs(), boost::algorithm::is_any_of(","));
+        for (auto const& t : tokens)
+        {
+            std::vector<std::string> seqs;
+            boost::split(seqs, t, boost::algorithm::is_any_of("-"));
+            if (seqs.size() == 1)
+                shards_.insert(
+                    beast::lexicalCastThrow<std::uint32_t>(seqs.front()));
+            else if (seqs.size() == 2)
+                shards_.insert(range(
+                    beast::lexicalCastThrow<std::uint32_t>(seqs.front()),
+                        beast::lexicalCastThrow<std::uint32_t>(seqs.back())));
+        }
+    }
+
     if (m->has_ledgerseq() &&
         app_.getLedgerMaster().getValidatedLedgerAge() < 2min)
     {
@@ -1422,6 +1465,9 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMStatusChange> const& m)
                 j[jss::ledger_index_max] =
                     Json::UInt (m->lastseq ());
             }
+
+            if (m->has_shardseqs())
+                j[jss::complete_shards] = m->shardseqs();
 
             return j;
         });
@@ -1630,7 +1676,6 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMGetObjectByHash> const& m)
             return;
         }
 
-
         if (packet.type () == protocol::TMGetObjectByHash::otFETCH_PACK)
         {
             doFetchPack (m);
@@ -1658,11 +1703,10 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMGetObjectByHash> const& m)
         // This is a very minimal implementation
         for (int i = 0; i < packet.objects_size (); ++i)
         {
-            uint256 hash;
-            const protocol::TMIndexedObject& obj = packet.objects (i);
-
+            auto const& obj = packet.objects (i);
             if (obj.has_hash () && (obj.hash ().size () == (256 / 8)))
             {
+                uint256 hash;
                 memcpy (hash.begin (), obj.hash ().data (), 256 / 8);
                 // VFALCO TODO Move this someplace more sensible so we dont
                 //             need to inject the NodeStore interfaces.
@@ -2084,7 +2128,6 @@ PeerImp::getLedger (std::shared_ptr<protocol::TMGetLedger> const& m)
 
         // Figure out what ledger they want
         JLOG(p_journal_.trace()) << "GetLedger: Received";
-        std::shared_ptr<Ledger const> ledger;
 
         if (packet.has_ledgerhash ())
         {
@@ -2127,22 +2170,12 @@ PeerImp::getLedger (std::shared_ptr<protocol::TMGetLedger> const& m)
                         return;
                     }
 
-                if (packet.has_ledgerseq ())
-                    seq = packet.ledgerseq ();
-
-                auto const v = getPeerWithLedger(
-                    overlay_, ledgerhash, seq, this);
-                if (! v)
-                {
-                    JLOG(p_journal_.trace()) << "GetLedger: Cannot route";
+                    packet.set_requestcookie (id ());
+                    v->send (std::make_shared<Message>(
+                        packet, protocol::mtGET_LEDGER));
+                    JLOG(p_journal_.debug()) << "GetLedger: Request routed";
                     return;
                 }
-
-                packet.set_requestcookie (id ());
-                v->send (std::make_shared<Message>(
-                    packet, protocol::mtGET_LEDGER));
-                JLOG(p_journal_.debug()) << "GetLedger: Request routed";
-                return;
             }
         }
         else if (packet.has_ledgerseq ())
@@ -2291,6 +2324,7 @@ PeerImp::getLedger (std::shared_ptr<protocol::TMGetLedger> const& m)
 
         std::vector<SHAMapNodeID> nodeIDs;
         std::vector< Blob > rawNodes;
+        bool result;
 
         try
         {
@@ -2318,8 +2352,9 @@ PeerImp::getLedger (std::shared_ptr<protocol::TMGetLedger> const& m)
                 }
             }
             else
-                JLOG(p_journal_.warn()) <<
-                    "GetLedger: getNodeFat returns false";
+            {
+                JLOG(p_journal_.warn()) << "GetLedger: getNodeFat returns false";
+            }
         }
         catch (std::exception&)
         {

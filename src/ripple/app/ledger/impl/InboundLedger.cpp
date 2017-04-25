@@ -18,9 +18,9 @@
 //==============================================================================
 
 #include <BeastConfig.h>
+#include <ripple/app/ledger/InboundLedger.h>
 #include <ripple/shamap/SHAMapNodeID.h>
 #include <ripple/app/ledger/AccountStateSF.h>
-#include <ripple/app/ledger/InboundLedger.h>
 #include <ripple/app/ledger/InboundLedgers.h>
 #include <ripple/app/ledger/LedgerMaster.h>
 #include <ripple/app/ledger/TransactionStateSF.h>
@@ -33,6 +33,8 @@
 #include <ripple/protocol/HashPrefix.h>
 #include <ripple/protocol/JsonFields.h>
 #include <ripple/nodestore/Database.h>
+#include <ripple/nodestore/DatabaseShard.h>
+
 #include <algorithm>
 
 namespace ripple {
@@ -66,8 +68,8 @@ enum
 // millisecond for each ledger timeout
 auto constexpr ledgerAcquireTimeout = 2500ms;
 
-InboundLedger::InboundLedger (
-    Application& app, uint256 const& hash, std::uint32_t seq, fcReason reason, clock_type& clock)
+InboundLedger::InboundLedger(Application& app, uint256 const& hash,
+    std::uint32_t seq, Reason reason, clock_type& clock)
     : PeerSet (app, hash, ledgerAcquireTimeout, clock,
         app.journal("InboundLedger"))
     , mHaveHeader (false)
@@ -79,37 +81,70 @@ InboundLedger::InboundLedger (
     , mReason (reason)
     , mReceiveDispatched (false)
 {
-    JLOG (m_journal.trace()) <<
-        "Acquiring ledger " << mHash;
+    JLOG (m_journal.trace()) << "Acquiring ledger " << mHash;
 }
 
-void InboundLedger::init (ScopedLockType& collectionLock)
+void
+InboundLedger::init(ScopedLockType& collectionLock)
 {
     ScopedLockType sl (mLock);
-    collectionLock.unlock ();
-
-    if (!tryLocal ())
+    collectionLock.unlock();
+    tryDB(app_.family());
+    if (mFailed)
+        return;
+    if (! mComplete)
     {
-        addPeers ();
-        setTimer ();
-    }
-    else if (!isFailed ())
-    {
-        JLOG (m_journal.debug()) <<
-            "Acquiring ledger we already have locally: " << getHash ();
-        mLedger->setImmutable (app_.config());
-
-        if (mReason != fcHISTORY)
-            app_.getLedgerMaster ().storeLedger (mLedger);
-
-        // Check if this could be a newer fully-validated ledger
-        if (mReason == fcVALIDATION ||
-            mReason == fcCURRENT ||
-            mReason == fcCONSENSUS)
+        auto shardStore = app_.getShardStore();
+        if (mReason == Reason::SHARD)
         {
-            app_.getLedgerMaster ().checkAccept (mLedger);
+            if (! shardStore || ! app_.shardFamily())
+            {
+                assert(false);
+                JLOG(m_journal.error()) <<
+                    "Acquiring shard with no shard store available";
+                mFailed = true;
+                return;
+            }
+            mHaveHeader = false;
+            mHaveTransactions = false;
+            mHaveState = false;
+            mLedger.reset();
+            tryDB(*app_.shardFamily());
+            if (mFailed)
+                return;
+        }
+        else if (shardStore)
+        {
+            if (auto l = shardStore->fetchLedger(app_, mHash, mSeq))
+            {
+                mHaveHeader = true;
+                mHaveTransactions = true;
+                mHaveState = true;
+                mComplete = true;
+                mLedger = std::move(l);
+            }
         }
     }
+    if (! mComplete)
+    {
+        addPeers();
+        execute();
+        return;
+    }
+
+    JLOG (m_journal.debug()) <<
+        "Acquiring ledger we already have in " <<
+        " local store. " << mHash;
+    mLedger->setImmutable(app_.config());
+
+    if (mReason == Reason::HISTORY || mReason == Reason::SHARD)
+        return;
+
+    app_.getLedgerMaster().storeLedger(mLedger);
+
+    // Check if this could be a newer fully-validated ledger
+    if (mReason == Reason::CONSENSUS)
+        app_.getLedgerMaster().checkAccept(mLedger);
 }
 
 void InboundLedger::execute ()
@@ -144,11 +179,19 @@ void InboundLedger::update (std::uint32_t seq)
 bool InboundLedger::checkLocal ()
 {
     ScopedLockType sl (mLock);
-
-    if (!isDone () && tryLocal())
+    if (! isDone())
     {
-        done();
-        return true;
+        if (mLedger)
+            tryDB(mLedger->stateMap().family());
+        else if(mReason == Reason::SHARD)
+            tryDB(*app_.shardFamily());
+        else
+            tryDB(app_.family());
+        if (mFailed || mComplete)
+        {
+            done();
+            return true;
+        }
     }
     return false;
 }
@@ -232,75 +275,83 @@ InboundLedger::deserializeHeader (
     return info;
 }
 
-/** See how much of the ledger data, if any, is
-    in our node store
-*/
-bool InboundLedger::tryLocal ()
+// See how much of the ledger data is stored locally
+// Data found in a fetch pack will be stored
+void
+InboundLedger::tryDB(Family& f)
 {
-    // return value: true = no more work to do
-
-    if (!mHaveHeader)
+    if (! mHaveHeader)
     {
-        // Nothing we can do without the ledger header
-        auto node = app_.getNodeStore ().fetch (mHash);
-
-        if (!node)
+        // Try to fetch the ledger header from the DB
+        auto node = f.db().fetch(mHash, mSeq);
+        if (! node)
         {
             auto data = app_.getLedgerMaster().getFetchPack(mHash);
             if (! data)
-                return false;
+                return;
 
             JLOG (m_journal.trace()) <<
                 "Ledger header found in fetch pack";
-
-            mLedger = std::make_shared<Ledger> (
-                deserializeHeader (makeSlice(*data), true),
-                app_.config(),
-                app_.family());
-
-            app_.getNodeStore ().store (
-                hotLEDGER, std::move (*data), mHash);
+            mLedger = std::make_shared<Ledger>(
+                deserializeHeader(makeSlice(*data), true),
+                    app_.config(), f);
+            if (mLedger->info().hash != mHash ||
+                (mSeq != 0 && mSeq != mLedger->info().seq))
+            {
+                // We know for a fact the ledger can never be acquired
+                JLOG(m_journal.warn()) <<
+                    "hash " << mHash <<
+                    " seq " << std::to_string(mSeq) <<
+                    " cannot be a ledger";
+                mFailed = true;
+                return;
+            }
+            f.db().store(hotLEDGER, std::move(*data),
+                mHash, mLedger->info().seq);
         }
         else
         {
+            JLOG (m_journal.trace()) <<
+                "Ledger header found in node store";
             mLedger = std::make_shared<Ledger>(
-                deserializeHeader (makeSlice (node->getData()), true),
-                app_.config(),
-                app_.family());
+                deserializeHeader(makeSlice(node->getData()), true),
+                    app_.config(), f);
+            if (mLedger->info().hash != mHash ||
+                (mSeq != 0 && mSeq != mLedger->info().seq))
+            {
+                // We know for a fact the ledger can never be acquired
+                JLOG(m_journal.warn()) <<
+                    "hash " << mHash <<
+                    " seq " << std::to_string(mSeq) <<
+                    " cannot be a ledger";
+                mFailed = true;
+                return;
+            }
         }
-
-        if (mLedger->info().hash != mHash)
-        {
-            // We know for a fact the ledger can never be acquired
-            JLOG (m_journal.warn()) <<
-                mHash << " cannot be a ledger";
-            mFailed = true;
-            return true;
-        }
-
+        if (mSeq == 0)
+            mSeq = mLedger->info().seq;
+        mLedger->stateMap().setLedgerSeq(mSeq);
+        mLedger->txMap().setLedgerSeq(mSeq);
         mHaveHeader = true;
     }
 
-    if (!mHaveTransactions)
+    if (! mHaveTransactions)
     {
-        if (mLedger->info().txHash.isZero ())
+        if (mLedger->info().txHash.isZero())
         {
-            JLOG (m_journal.trace()) <<
-                "No TXNs to fetch";
+            JLOG (m_journal.trace()) << "No TXNs to fetch";
             mHaveTransactions = true;
         }
         else
         {
-            TransactionStateSF filter(mLedger->txMap().family(),
+            TransactionStateSF filter(mLedger->txMap().family().db(),
                 app_.getLedgerMaster());
-
-            if (mLedger->txMap().fetchRoot (
+            if (mLedger->txMap().fetchRoot(
                 SHAMapHash{mLedger->info().txHash}, &filter))
             {
-                auto h = neededTxHashes (1, &filter);
-                if (h.empty ())
+                if (neededTxHashes(1, &filter).empty())
                 {
-                    JLOG (m_journal.trace()) <<
+                    JLOG(m_journal.trace()) <<
                         "Had full txn map locally";
                     mHaveTransactions = true;
                 }
@@ -308,26 +359,23 @@ bool InboundLedger::tryLocal ()
         }
     }
 
-    if (!mHaveState)
+    if (! mHaveState)
     {
-        if (mLedger->info().accountHash.isZero ())
+        if (mLedger->info().accountHash.isZero())
         {
             JLOG (m_journal.fatal()) <<
                 "We are acquiring a ledger with a zero account hash";
             mFailed = true;
-            return true;
+            return;
         }
-
-        AccountStateSF filter(mLedger->stateMap().family(),
+        AccountStateSF filter(mLedger->stateMap().family().db(),
             app_.getLedgerMaster());
-
-        if (mLedger->stateMap().fetchRoot (
+        if (mLedger->stateMap().fetchRoot(
             SHAMapHash{mLedger->info().accountHash}, &filter))
         {
-            auto h = neededStateHashes (1, &filter);
-            if (h.empty ())
+            if (neededStateHashes(1, &filter).empty())
             {
-                JLOG (m_journal.trace()) <<
+                JLOG(m_journal.trace()) <<
                     "Had full AS map locally";
                 mHaveState = true;
             }
@@ -336,13 +384,11 @@ bool InboundLedger::tryLocal ()
 
     if (mHaveTransactions && mHaveState)
     {
-        JLOG (m_journal.debug()) <<
+        JLOG(m_journal.debug()) <<
             "Had everything locally";
         mComplete = true;
-        mLedger->setImmutable (app_.config());
+        mLedger->setImmutable(app_.config());
     }
-
-    return mComplete;
 }
 
 /** Called with a lock by the PeerSet when the timer expires
@@ -386,14 +432,14 @@ void InboundLedger::onTimer (bool wasProgress, ScopedLockType&)
             "No progress(" << pc <<
             ") for ledger " << mHash;
 
-        // addPeers triggers if the reason is not fcHISTORY
-        // So if the reason IS fcHISTORY, need to trigger after we add
+        // addPeers triggers if the reason is not HISTORY
+        // So if the reason IS HISTORY, need to trigger after we add
         // otherwise, we need to trigger before we add
         // so each peer gets triggered once
-        if (mReason != fcHISTORY)
+        if (mReason != Reason::HISTORY)
             trigger (nullptr, TriggerReason::timeout);
         addPeers ();
-        if (mReason == fcHISTORY)
+        if (mReason == Reason::HISTORY)
             trigger (nullptr, TriggerReason::timeout);
     }
 }
@@ -421,20 +467,29 @@ void InboundLedger::done ()
 
     JLOG (m_journal.debug()) <<
         "Acquire " << mHash <<
-        (isFailed () ? " fail " : " ") <<
+        (mFailed ? " fail " : " ") <<
         ((getTimeouts () == 0) ? std::string() :
             (std::string ("timeouts:") +
             to_string (getTimeouts ()) + " ")) <<
         mStats.get ();
 
-    assert (isComplete () || isFailed ());
+    assert (mComplete || mFailed);
 
-    if (isComplete () && !isFailed () && mLedger)
+    if (mComplete && ! mFailed && mLedger)
     {
         mLedger->setImmutable (app_.config());
-        if (mReason != fcHISTORY)
-            app_.getLedgerMaster ().storeLedger (mLedger);
-        app_.getInboundLedgers().onLedgerFetched(mReason);
+        switch (mReason)
+        {
+        case Reason::SHARD:
+            app_.getShardStore()->setStored(mLedger);
+            // fall through
+        case Reason::HISTORY:
+            app_.getInboundLedgers().onLedgerFetched();
+            break;
+        default:
+            app_.getLedgerMaster().storeLedger(mLedger);
+            break;
+        }
     }
 
     // We hold the PeerSet lock, so must dispatch
@@ -442,7 +497,7 @@ void InboundLedger::done ()
         jtLEDGER_DATA, "AcquisitionDone",
         [self = shared_from_this()](Job&)
         {
-            if (self->isComplete() && !self->isFailed())
+            if (self->mComplete && !self->mFailed)
             {
                 self->app().getLedgerMaster().checkAccept(
                     self->getLedger());
@@ -487,10 +542,10 @@ void InboundLedger::trigger (std::shared_ptr<Peer> const& peer, TriggerReason re
                     " as=" << mHaveState;
     }
 
-    if (!mHaveHeader)
+    if (! mHaveHeader)
     {
-        tryLocal ();
-
+        tryDB(mReason == Reason::SHARD ?
+            *app_.shardFamily() : app_.family());
         if (mFailed)
         {
             JLOG (m_journal.warn()) <<
@@ -506,17 +561,19 @@ void InboundLedger::trigger (std::shared_ptr<Peer> const& peer, TriggerReason re
     { // Be more aggressive if we've timed out at least once
         tmGL.set_querytype (protocol::qtINDIRECT);
 
-        if (!isProgress () && !mFailed && mByHash && (
-            getTimeouts () > ledgerBecomeAggressiveThreshold))
+        if (! isProgress () && ! mFailed && mByHash &&
+            (getTimeouts () > ledgerBecomeAggressiveThreshold))
         {
             auto need = getNeededHashes ();
 
             if (!need.empty ())
             {
                 protocol::TMGetObjectByHash tmBH;
+                bool typeSet = false;
                 tmBH.set_query (true);
                 tmBH.set_ledgerhash (mHash.begin (), mHash.size ());
-                bool typeSet = false;
+                if (mSeq != 0)
+                    tmBH.set_seq (mSeq);
                 for (auto const& p : need)
                 {
                     JLOG (m_journal.warn()) <<
@@ -564,6 +621,8 @@ void InboundLedger::trigger (std::shared_ptr<Peer> const& peer, TriggerReason re
     if (!mHaveHeader && !mFailed)
     {
         tmGL.set_itype (protocol::liBASE);
+        if (mSeq != 0)
+            tmGL.set_ledgerseq (mSeq);
         JLOG (m_journal.trace()) <<
             "Sending header request to " <<
              (peer ? "selected peer" : "all peers");
@@ -610,7 +669,7 @@ void InboundLedger::trigger (std::shared_ptr<Peer> const& peer, TriggerReason re
         }
         else
         {
-            AccountStateSF filter(mLedger->stateMap().family(),
+            AccountStateSF filter(mLedger->stateMap().family().db(),
                 app_.getLedgerMaster());
 
             // Release the lock while we process the large state map
@@ -684,7 +743,7 @@ void InboundLedger::trigger (std::shared_ptr<Peer> const& peer, TriggerReason re
         }
         else
         {
-            TransactionStateSF filter(mLedger->txMap().family(),
+            TransactionStateSF filter(mLedger->txMap().family().db(),
                 app_.getLedgerMaster());
 
             auto nodes = mLedger->txMap().getMissingNodes (
@@ -799,11 +858,10 @@ bool InboundLedger::takeHeader (std::string const& data)
     if (mComplete || mFailed || mHaveHeader)
         return true;
 
-    mLedger = std::make_shared<Ledger>(
-        deserializeHeader (makeSlice(data), false),
-        app_.config(),
-        app_.family());
-
+    auto* f = mReason == Reason::SHARD ?
+        app_.shardFamily() : &app_.family();
+    mLedger = std::make_shared<Ledger>(deserializeHeader(
+        makeSlice(data), false), app_.config(), *f);
     if (mLedger->info().hash != mHash)
     {
         JLOG (m_journal.warn()) <<
@@ -812,14 +870,16 @@ bool InboundLedger::takeHeader (std::string const& data)
         mLedger.reset ();
         return false;
     }
-
+    if (mSeq == 0)
+        mSeq = mLedger->info().seq;
+    mLedger->stateMap().setLedgerSeq(mSeq);
+    mLedger->txMap().setLedgerSeq(mSeq);
     mHaveHeader = true;
 
     Serializer s (data.size () + 4);
     s.add32 (HashPrefix::ledgerMaster);
     s.addRaw (data.data(), data.size());
-    app_.getNodeStore ().store (
-        hotLEDGER, std::move (s.modData ()), mHash);
+    f->db().store(hotLEDGER, std::move (s.modData ()), mHash, mSeq);
 
     if (mLedger->info().txHash.isZero ())
         mHaveTransactions = true;
@@ -855,7 +915,7 @@ bool InboundLedger::takeTxNode (const std::vector<SHAMapNodeID>& nodeIDs,
 
     auto nodeIDit = nodeIDs.cbegin ();
     auto nodeDatait = data.begin ();
-    TransactionStateSF filter(mLedger->txMap().family(),
+    TransactionStateSF filter(mLedger->txMap().family().db(),
         app_.getLedgerMaster());
 
     while (nodeIDit != nodeIDs.cend ())
@@ -927,7 +987,7 @@ bool InboundLedger::takeAsNode (const std::vector<SHAMapNodeID>& nodeIDs,
 
     auto nodeIDit = nodeIDs.cbegin ();
     auto nodeDatait = data.begin ();
-    AccountStateSF filter(mLedger->stateMap().family(),
+    AccountStateSF filter(mLedger->stateMap().family().db(),
         app_.getLedgerMaster());
 
     while (nodeIDit != nodeIDs.cend ())
@@ -991,7 +1051,7 @@ bool InboundLedger::takeAsRootNode (Slice const& data, SHAMapAddNode& san)
         return false;
     }
 
-    AccountStateSF filter(mLedger->stateMap().family(),
+    AccountStateSF filter(mLedger->stateMap().family().db(),
         app_.getLedgerMaster());
     san += mLedger->stateMap().addRootNode (
         SHAMapHash{mLedger->info().accountHash}, data, snfWIRE, &filter);
@@ -1015,7 +1075,7 @@ bool InboundLedger::takeTxRootNode (Slice const& data, SHAMapAddNode& san)
         return false;
     }
 
-    TransactionStateSF filter(mLedger->txMap().family(),
+    TransactionStateSF filter(mLedger->txMap().family().db(),
         app_.getLedgerMaster());
     san += mLedger->txMap().addRootNode (
         SHAMapHash{mLedger->info().txHash}, data, snfWIRE, &filter);
@@ -1036,7 +1096,7 @@ InboundLedger::getNeededHashes ()
 
     if (!mHaveState)
     {
-        AccountStateSF filter(mLedger->stateMap().family(),
+        AccountStateSF filter(mLedger->stateMap().family().db(),
             app_.getLedgerMaster());
         for (auto const& h : neededStateHashes (4, &filter))
         {
@@ -1047,7 +1107,7 @@ InboundLedger::getNeededHashes ()
 
     if (!mHaveTransactions)
     {
-        TransactionStateSF filter(mLedger->txMap().family(),
+        TransactionStateSF filter(mLedger->txMap().family().db(),
             app_.getLedgerMaster());
         for (auto const& h : neededTxHashes (4, &filter))
         {
@@ -1062,9 +1122,9 @@ InboundLedger::getNeededHashes ()
 /** Stash a TMLedgerData received from a peer for later processing
     Returns 'true' if we need to dispatch
 */
-// VFALCO TODO Why isn't the shared_ptr passed by const& ?
-bool InboundLedger::gotData (std::weak_ptr<Peer> peer,
-    std::shared_ptr<protocol::TMLedgerData> data)
+bool
+InboundLedger::gotData(std::weak_ptr<Peer> peer,
+    std::shared_ptr<protocol::TMLedgerData> const& data)
 {
     std::lock_guard<std::mutex> sl (mReceivedDataLock);
 

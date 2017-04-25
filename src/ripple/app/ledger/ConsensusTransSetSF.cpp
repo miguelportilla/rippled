@@ -38,9 +38,9 @@ ConsensusTransSetSF::ConsensusTransSetSF (Application& app, NodeCache& nodeCache
 {
 }
 
-void ConsensusTransSetSF::gotNode (
-    bool fromFilter, SHAMapHash const& nodeHash,
-    Blob&& nodeData, SHAMapTreeNode::TNType type) const
+void
+ConsensusTransSetSF::gotNode(bool fromFilter, SHAMapHash const& nodeHash,
+    std::uint32_t ledgerSeq, Blob&& nodeData, SHAMapTreeNode::TNType type) const
 {
     if (fromFilter)
         return;
@@ -76,7 +76,8 @@ void ConsensusTransSetSF::gotNode (
 }
 
 boost::optional<Blob>
-ConsensusTransSetSF::getNode (SHAMapHash const& nodeHash) const
+ConsensusTransSetSF::getNode (SHAMapHash const& nodeHash,
+    std::uint32_t ledgerSeq) const
 {
     Blob nodeData;
     if (m_nodeCache.retrieve (nodeHash, nodeData))

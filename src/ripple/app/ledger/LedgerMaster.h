@@ -22,6 +22,7 @@
 
 #include <ripple/app/main/Application.h>
 #include <ripple/app/ledger/AbstractFetchPackContainer.h>
+#include <ripple/app/ledger/InboundLedgers.h>
 #include <ripple/app/ledger/Ledger.h>
 #include <ripple/app/ledger/LedgerCleaner.h>
 #include <ripple/app/ledger/LedgerHistory.h>
@@ -180,7 +181,7 @@ public:
         LedgerIndex ledgerIndex);
 
     boost::optional <NetClock::time_point> getCloseTimeByHash (
-        LedgerHash const& ledgerHash);
+        LedgerHash const& ledgerHash, std::uint32_t index);
 
     void addHeldTransaction (std::shared_ptr<Transaction> const& trans);
     void fixMismatch (ReadView const& ledger);
@@ -241,6 +242,11 @@ public:
         std::uint32_t uUptime);
 
     std::size_t getFetchPackCacheSize () const;
+
+    void fetchForHistory(
+        std::uint32_t missing,
+        bool& progress,
+        InboundLedger::Reason reason);
 
 private:
     using ScopedLockType = std::lock_guard <std::recursive_mutex>;
