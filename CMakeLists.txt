@@ -150,6 +150,7 @@ use_boost(
   filesystem
   program_options
   regex
+  serialization
   system
   thread)
 
@@ -490,8 +491,8 @@ if(${B2_EXE} STREQUAL "B2_EXE-NOTFOUND")
     "Boost b2 executable not found. docs target will not be buildable")
 elseif(NOT BOOST_ROOT)
     if(Boost_INCLUDE_DIRS)
-        set(BOOST_ROOT ${Boost_INCLUDE_DIRS})
     else()
+        set(BOOST_ROOT ${Boost_INCLUDE_DIRS})
         get_filename_component(BOOST_ROOT ${B2_EXE} DIRECTORY)
     endif()
 endif()

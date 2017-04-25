@@ -87,6 +87,8 @@ private:
     mutable SHAMapState             state_;
     SHAMapType                      type_;
     bool                            backed_ = true; // Map is backed by the database
+    bool                            full_ = false; // Indicates all nodes should reside in a local store.
+
 
 public:
     class version
@@ -122,6 +124,12 @@ public:
         Family& f,
         version v);
 
+    Family const&
+    family() const
+    {
+        return f_;
+    }
+
     Family&
     family()
     {
@@ -150,6 +158,8 @@ public:
         Marked `const` because the data is not part of
         the map contents.
     */
+    void setFull ();
+
     void setLedgerSeq (std::uint32_t lseq);
 
     bool fetchRoot (SHAMapHash const& hash, SHAMapSyncFilter * filter);
@@ -392,6 +402,13 @@ private:
     void gmn_ProcessNodes (MissingNodes&, MissingNodes::StackEntry& node);
     void gmn_ProcessDeferredReads (MissingNodes&);
 };
+
+inline
+void
+SHAMap::setFull ()
+{
+    full_ = true;
+}
 
 inline
 void

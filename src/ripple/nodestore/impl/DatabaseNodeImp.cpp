@@ -18,43 +18,15 @@
 //==============================================================================
 
 #include <BeastConfig.h>
-#include <ripple/nodestore/impl/DatabaseRotatingImp.h>
+#include <ripple/nodestore/impl/DatabaseNodeImp.h>
 #include <ripple/app/ledger/Ledger.h>
 #include <ripple/protocol/HashPrefix.h>
 
 namespace ripple {
 namespace NodeStore {
 
-DatabaseRotatingImp::DatabaseRotatingImp(
-    std::string const& name, Scheduler& scheduler, int readThreads,
-        Stoppable& parent, std::shared_ptr <Backend> writableBackend,
-            std::shared_ptr <Backend> archiveBackend, beast::Journal j)
-    : DatabaseRotating(name, parent, scheduler, readThreads, j)
-    , pCache_(name, cacheTargetSize, cacheTargetSeconds, stopwatch(), j)
-    , nCache_(name, stopwatch(), cacheTargetSize, cacheTargetSeconds)
-    , writableBackend_(writableBackend)
-    , archiveBackend_(archiveBackend)
-{
-    if (writableBackend)
-        fdLimit_ += writableBackend_->fdlimit();
-    if (archiveBackend_)
-        fdLimit_ += archiveBackend_->fdlimit();
-}
-
-// Make sure to call it already locked!
-std::shared_ptr<Backend>
-DatabaseRotatingImp::rotateBackends(
-    std::shared_ptr <Backend> const& newBackend)
-{
-    std::shared_ptr <Backend> oldBackend = archiveBackend_;
-    archiveBackend_ = writableBackend_;
-    writableBackend_ = newBackend;
-
-    return oldBackend;
-}
-
 void
-DatabaseRotatingImp::store(NodeObjectType type, Blob&& data,
+DatabaseNodeImp::store(NodeObjectType type, Blob&& data,
     uint256 const& hash, std::uint32_t seq)
 {
 #if RIPPLE_VERIFY_NODEOBJECT_KEYS
@@ -62,13 +34,13 @@ DatabaseRotatingImp::store(NodeObjectType type, Blob&& data,
 #endif
     auto nObj = NodeObject::createObject(type, std::move(data), hash);
     pCache_.canonicalize(hash, nObj, true);
-    getWritableBackend()->store(nObj);
+    backend_->store(nObj);
     nCache_.erase(hash);
     storeStats(nObj->getData().size());
 }
 
 bool
-DatabaseRotatingImp::asyncFetch(uint256 const& hash,
+DatabaseNodeImp::asyncFetch(uint256 const& hash,
     std::uint32_t seq, std::shared_ptr<NodeObject>& object)
 {
     // See if the object is in cache
@@ -81,7 +53,7 @@ DatabaseRotatingImp::asyncFetch(uint256 const& hash,
 }
 
 bool
-DatabaseRotatingImp::copyLedger(
+DatabaseNodeImp::copyLedger(
     std::shared_ptr<Ledger const> const& ledger)
 {
     if (ledger->info().hash.isZero() ||
@@ -155,12 +127,12 @@ DatabaseRotatingImp::copyLedger(
         nCache_.erase(nObj->getHash());
         storeStats(nObj->getData().size());
     }
-    getWritableBackend()->storeBatch(batch);
+    backend_->storeBatch(batch);
     return true;
 }
 
 void
-DatabaseRotatingImp::tune(int size, int age)
+DatabaseNodeImp::tune(int size, int age)
 {
     pCache_.setTargetSize(size);
     pCache_.setTargetAge(age);
@@ -169,27 +141,10 @@ DatabaseRotatingImp::tune(int size, int age)
 }
 
 void
-DatabaseRotatingImp::sweep()
+DatabaseNodeImp::sweep()
 {
     pCache_.sweep();
     nCache_.sweep();
-}
-
-std::shared_ptr<NodeObject>
-DatabaseRotatingImp::fetchFrom(uint256 const& hash, std::uint32_t seq)
-{
-    Backends b = getBackends();
-    auto nObj = fetchInternal(hash, *b.writableBackend);
-    if (! nObj)
-    {
-        nObj = fetchInternal(hash, *b.archiveBackend);
-        if (nObj)
-        {
-            getWritableBackend()->store(nObj);
-            nCache_.erase(hash);
-        }
-    }
-    return nObj;
 }
 
 } // NodeStore

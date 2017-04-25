@@ -33,6 +33,7 @@
 #include <ripple/basics/random.h>
 #include <ripple/basics/UptimeTimer.h>
 #include <ripple/beast/core/SemanticVersion.h>
+#include <ripple/nodestore/DatabaseShard.h>
 #include <ripple/overlay/Cluster.h>
 #include <ripple/protocol/digest.h>
 
@@ -1662,9 +1663,13 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMGetObjectByHash> const& m)
                 memcpy (hash.begin (), obj.hash ().data (), 256 / 8);
                 // VFALCO TODO Move this someplace more sensible so we dont
                 //             need to inject the NodeStore interfaces.
-                std::shared_ptr<NodeObject> hObj =
-                    app_.getNodeStore ().fetch (hash);
-
+                std::uint32_t seq {obj.has_ledgerseq() ? obj.ledgerseq() : 0};
+                auto hObj {app_.getNodeStore ().fetch (hash, seq)};
+                if (!hObj)
+                {
+                    if (auto shardStore = app_.getShardStore())
+                        hObj = shardStore->fetch(hash, seq);
+                }
                 if (hObj)
                 {
                     protocol::TMIndexedObject& newObj = *reply.add_objects ();
@@ -1674,6 +1679,8 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMGetObjectByHash> const& m)
 
                     if (obj.has_nodeid ())
                         newObj.set_index (obj.nodeid ());
+                    if (obj.has_ledgerseq())
+                        newObj.set_ledgerseq(obj.ledgerseq());
 
                     // VFALCO NOTE "seq" in the message is obsolete
                 }

@@ -19,7 +19,7 @@
 
 #include <BeastConfig.h>
 #include <ripple/nodestore/impl/ManagerImp.h>
-#include <ripple/nodestore/impl/DatabaseRotatingImp.h>
+#include <ripple/nodestore/impl/DatabaseNodeImp.h>
 
 namespace ripple {
 namespace NodeStore {
@@ -89,7 +89,7 @@ ManagerImp::make_Database (
     Section const& backendParameters,
     beast::Journal journal)
 {
-    return std::make_unique <DatabaseImp> (
+    return std::make_unique <DatabaseNodeImp> (
         name,
         scheduler,
         readThreads,
@@ -100,41 +100,6 @@ ManagerImp::make_Database (
             journal),
         journal);
 }
-
-std::unique_ptr <DatabaseRotating>
-ManagerImp::make_DatabaseRotating (
-        std::string const& name,
-        Scheduler& scheduler,
-        std::int32_t readThreads,
-        Stoppable& parent,
-        std::shared_ptr <Backend> writableBackend,
-        std::shared_ptr <Backend> archiveBackend,
-        beast::Journal journal)
-{
-    return std::make_unique <DatabaseRotatingImp> (
-        name,
-        scheduler,
-        readThreads,
-        parent,
-        writableBackend,
-        archiveBackend,
-        journal);
-}
-
-Factory*
-ManagerImp::find (std::string const& name)
-{
-    std::lock_guard<std::mutex> _(mutex_);
-    auto const iter = std::find_if(list_.begin(), list_.end(),
-        [&name](Factory* other)
-        {
-            return beast::detail::iequals(name, other->getName());
-        } );
-    if (iter == list_.end())
-        return nullptr;
-    return *iter;
-}
-
 
 void
 ManagerImp::insert (Factory& factory)
@@ -151,6 +116,20 @@ ManagerImp::erase (Factory& factory)
         [&factory](Factory* other) { return other == &factory; });
     assert(iter != list_.end());
     list_.erase(iter);
+}
+
+Factory*
+ManagerImp::find (std::string const& name)
+{
+    std::lock_guard<std::mutex> _(mutex_);
+    auto const iter = std::find_if(list_.begin(), list_.end(),
+        [&name](Factory* other)
+        {
+            return beast::detail::iequals(name, other->getName());
+        } );
+    if (iter == list_.end())
+        return nullptr;
+    return *iter;
 }
 
 //------------------------------------------------------------------------------

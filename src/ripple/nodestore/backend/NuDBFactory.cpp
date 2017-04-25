@@ -197,7 +197,6 @@ public:
     storeBatch (Batch const& batch) override
     {
         BatchWriteReport report;
-        EncodedBlob encoded;
         report.writeCount = batch.size();
         auto const start =
             std::chrono::steady_clock::now();

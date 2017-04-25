@@ -106,7 +106,7 @@ RCLConsensus::Adaptor::acquireLedger(LedgerHash const& ledger)
             app_.getJobQueue().addJob(
                 jtADVANCE, "getConsensusLedger", [app, hash](Job&) {
                     app->getInboundLedgers().acquire(
-                        hash, 0, InboundLedger::fcCONSENSUS);
+                        hash, 0, InboundLedger::Reason::CONSENSUS);
                 });
         }
         return boost::none;

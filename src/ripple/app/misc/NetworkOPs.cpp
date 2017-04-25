@@ -1380,7 +1380,7 @@ bool NetworkOPsImp::checkLastClosedLedger (
 
     if (!consensus)
         consensus = app_.getInboundLedgers().acquire (
-            closedLedger, 0, InboundLedger::fcCONSENSUS);
+            closedLedger, 0, InboundLedger::Reason::CONSENSUS);
 
     if (consensus &&
         ! m_ledgerMaster.isCompatible (*consensus, m_journal.debug(),

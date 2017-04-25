@@ -22,6 +22,7 @@
 
 #include <ripple/app/main/Application.h>
 #include <ripple/app/ledger/AbstractFetchPackContainer.h>
+#include <ripple/app/ledger/InboundLedgers.h>
 #include <ripple/app/ledger/Ledger.h>
 #include <ripple/app/ledger/LedgerCleaner.h>
 #include <ripple/app/ledger/LedgerHistory.h>
@@ -180,7 +181,7 @@ public:
         LedgerIndex ledgerIndex);
 
     boost::optional <NetClock::time_point> getCloseTimeByHash (
-        LedgerHash const& ledgerHash);
+        LedgerHash const& ledgerHash, std::uint32_t index);
 
     void addHeldTransaction (std::shared_ptr<Transaction> const& trans);
     void fixMismatch (ReadView const& ledger);
@@ -242,6 +243,11 @@ public:
 
     std::size_t getFetchPackCacheSize () const;
 
+    void fetchForHistory(
+        std::uint32_t missing,
+        bool& progress,
+        InboundLedger::Reason reason);
+
 private:
     using ScopedLockType = std::lock_guard <std::recursive_mutex>;
     using ScopedUnlockType = GenericScopedUnlock <std::recursive_mutex>;
@@ -255,8 +261,12 @@ private:
         Job& job,
         std::shared_ptr<Ledger const> ledger);
 
-    void getFetchPack(LedgerHash missingHash, LedgerIndex missingIndex);
-    boost::optional<LedgerHash> getLedgerHashForHistory(LedgerIndex index);
+    void getFetchPack(
+        LedgerIndex missingIndex, InboundLedger::Reason reason);
+
+    boost::optional<LedgerHash> getLedgerHashForHistory(
+        LedgerIndex index, InboundLedger::Reason reason);
+
     std::size_t getNeededValidations();
     void advanceThread();
     // Try to publish ledgers, acquire missing ledgers.  Always called with
@@ -298,6 +308,9 @@ private:
 
     // The last ledger we handled fetching history
     std::shared_ptr<Ledger const> mHistLedger;
+
+    // The last ledger we handled fetching for a shard
+    std::shared_ptr<Ledger const> mShardLedger;
 
     // Fully validated ledger, whether or not we have the ledger resident.
     std::pair <uint256, LedgerIndex> mLastValidLedger {uint256(), 0};
@@ -342,7 +355,7 @@ private:
     // How much history do we want to keep
     std::uint32_t const ledger_history_;
 
-    int const ledger_fetch_size_;
+    std::uint32_t const ledger_fetch_size_;
 
     TaggedCache<uint256, Blob> fetch_packs_;
 

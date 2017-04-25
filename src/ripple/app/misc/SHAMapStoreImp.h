@@ -27,7 +27,6 @@
 #include <condition_variable>
 #include <thread>
 
-
 namespace ripple {
 
 class NetworkOPs;
@@ -87,7 +86,7 @@ private:
     NodeStore::Scheduler& scheduler_;
     beast::Journal journal_;
     beast::Journal nodeStoreJournal_;
-    NodeStore::DatabaseRotating* database_ = nullptr;
+    NodeStore::DatabaseRotating* dbRotating_ = nullptr;
     SavedStateDB state_db_;
     std::thread thread_;
     bool stop_ = false;
@@ -136,6 +135,10 @@ public:
             std::string const&name,
             std::int32_t readThreads, Stoppable& parent) override;
 
+    std::unique_ptr <NodeStore::DatabaseShard>
+    makeDatabaseShard(std::string const& name,
+        std::int32_t readThreads, Stoppable& parent) override;
+
     LedgerIndex
     setCanDelete (LedgerIndex seq) override
     {
@@ -178,22 +181,6 @@ private:
     void dbPaths();
     std::shared_ptr <NodeStore::Backend> makeBackendRotating (
             std::string path = std::string());
-    /**
-     * Creates a NodeStore with two
-     * backends to allow online deletion of data.
-     *
-     * @param name A diagnostic label for the database.
-     * @param readThreads The number of async read threads to create
-     * @param writableBackend backend for writing
-     * @param archiveBackend backend for archiving
-     *
-     * @return The opened database.
-     */
-    std::unique_ptr <NodeStore::DatabaseRotating>
-    makeDatabaseRotating (std::string const&name,
-            std::int32_t readThreads, Stoppable& parent,
-            std::shared_ptr <NodeStore::Backend> writableBackend,
-            std::shared_ptr <NodeStore::Backend> archiveBackend) const;
 
     template <class CacheInstance>
     bool
@@ -203,7 +190,7 @@ private:
 
         for (auto const& key: cache.getKeys())
         {
-            database_->fetchNode (key);
+            dbRotating_->fetch(key, 0);
             if (! (++check % checkHealthInterval_) && health())
                 return true;
         }
