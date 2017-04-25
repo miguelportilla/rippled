@@ -19,7 +19,7 @@
 
 #include <BeastConfig.h>
 #include <ripple/nodestore/impl/ManagerImp.h>
-#include <ripple/nodestore/impl/DatabaseRotatingImp.h>
+#include <ripple/nodestore/impl/DatabaseNodeImp.h>
 
 namespace ripple {
 namespace NodeStore {
@@ -89,7 +89,7 @@ ManagerImp::make_Database (
     Section const& backendParameters,
     beast::Journal journal)
 {
-    return std::make_unique <DatabaseImp> (
+    return std::make_unique <DatabaseNodeImp> (
         name,
         scheduler,
         readThreads,
@@ -98,26 +98,6 @@ ManagerImp::make_Database (
             backendParameters,
             scheduler,
             journal),
-        journal);
-}
-
-std::unique_ptr <DatabaseRotating>
-ManagerImp::make_DatabaseRotating (
-        std::string const& name,
-        Scheduler& scheduler,
-        std::int32_t readThreads,
-        Stoppable& parent,
-        std::shared_ptr <Backend> writableBackend,
-        std::shared_ptr <Backend> archiveBackend,
-        beast::Journal journal)
-{
-    return std::make_unique <DatabaseRotatingImp> (
-        name,
-        scheduler,
-        readThreads,
-        parent,
-        writableBackend,
-        archiveBackend,
         journal);
 }
 

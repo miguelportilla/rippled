@@ -87,8 +87,7 @@ public:
     */
     static
     std::shared_ptr<NodeObject>
-    createObject (NodeObjectType type,
-        Blob&& data, uint256 const& hash);
+    createObject (NodeObjectType type, Blob&& data, uint256 const& hash);
 
     /** Returns the type of this object. */
     NodeObjectType getType () const;

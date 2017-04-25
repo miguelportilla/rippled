@@ -1643,8 +1643,12 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMGetObjectByHash> const& m)
 
         reply.set_query (false);
 
-        if (packet.has_seq ())
-            reply.set_seq (packet.seq ());
+        NodeStore::DatabaseShard* shardStore = nullptr;
+        if (packet.has_seq())
+        {
+            reply.set_seq(packet.seq());
+            shardStore = app_.getShardStore();
+        }
 
         reply.set_type (packet.type ());
 
@@ -1663,8 +1667,9 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMGetObjectByHash> const& m)
                 // VFALCO TODO Move this someplace more sensible so we dont
                 //             need to inject the NodeStore interfaces.
                 std::shared_ptr<NodeObject> hObj =
-                    app_.getNodeStore ().fetch (hash);
-
+                    app_.getNodeStore ().fetch (hash, packet.seq ());
+                if (! hObj && shardStore)
+                    hObj = shardStore->fetch(hash, packet.seq());
                 if (hObj)
                 {
                     protocol::TMIndexedObject& newObj = *reply.add_objects ();
@@ -2008,6 +2013,7 @@ PeerImp::getLedger (std::shared_ptr<protocol::TMGetLedger> const& m)
     SHAMap const* map = nullptr;
     protocol::TMLedgerData reply;
     bool fatLeaves = true;
+    std::shared_ptr<Ledger const> ledger;
 
     if (packet.has_requestcookie ())
         reply.set_requestcookie (packet.requestcookie ());
@@ -2105,6 +2111,21 @@ PeerImp::getLedger (std::shared_ptr<protocol::TMGetLedger> const& m)
                 !packet.has_requestcookie ()))
             {
                 std::uint32_t seq = 0;
+                if (packet.has_ledgerseq())
+                {
+                    seq = packet.ledgerseq();
+                    if (auto shardStore = app_.getShardStore())
+                        ledger = shardStore->fetchLedger(app_, ledgerhash, seq);
+                }
+                if (! ledger)
+                {
+                    auto const v = getPeerWithLedger(
+                        overlay_, ledgerhash, seq, this);
+                    if (! v)
+                    {
+                        JLOG(p_journal_.trace()) << "GetLedger: Cannot route";
+                        return;
+                    }
 
                 if (packet.has_ledgerseq ())
                     seq = packet.ledgerseq ();
@@ -2273,9 +2294,9 @@ PeerImp::getLedger (std::shared_ptr<protocol::TMGetLedger> const& m)
 
         try
         {
-            // We are guaranteed that map is non-null, but we need to check
-            // to keep the compiler happy.
-            if (map && map->getNodeFat (mn, nodeIDs, rawNodes, fatLeaves, depth))
+            result = map->getNodeFat(mn, nodeIDs, rawNodes,
+                fatLeaves, depth);
+            if (result)
             {
                 assert (nodeIDs.size () == rawNodes.size ());
                 JLOG(p_journal_.trace()) <<

@@ -40,6 +40,11 @@ public:
     void
     insert (Factory& factory) = 0;
 
+    /** Find a Factory. */
+    virtual
+    Factory*
+    find(std::string const& name) = 0;
+
     /** Remove a factory. */
     virtual
     void
@@ -87,15 +92,6 @@ public:
         int readThreads, Stoppable& parent,
             Section const& backendParameters,
                 beast::Journal journal) = 0;
-
-    virtual
-    std::unique_ptr <DatabaseRotating>
-    make_DatabaseRotating (std::string const& name,
-        Scheduler& scheduler, std::int32_t readThreads,
-            Stoppable& parent,
-                std::shared_ptr <Backend> writableBackend,
-                    std::shared_ptr <Backend> archiveBackend,
-                        beast::Journal journal) = 0;
 };
 
 //------------------------------------------------------------------------------

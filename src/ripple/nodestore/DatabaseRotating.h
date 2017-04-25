@@ -30,10 +30,13 @@ namespace NodeStore {
  * rotated in. Old ones are rotated out and deleted.
  */
 
-class DatabaseRotating
+class DatabaseRotating : public Database
 {
 public:
-    virtual ~DatabaseRotating() = default;
+    DatabaseRotating(std::string const& name, Stoppable& parent,
+        Scheduler& scheduler, int readThreads, beast::Journal journal)
+        : Database(name, parent, scheduler, readThreads, journal)
+    {}
 
     virtual TaggedCache <uint256, NodeObject>& getPositiveCache() = 0;
 
@@ -45,9 +48,6 @@ public:
 
     virtual std::shared_ptr <Backend> rotateBackends (
             std::shared_ptr <Backend> const& newBackend) = 0;
-
-    /** Ensure that node is in writableBackend */
-    virtual std::shared_ptr<NodeObject> fetchNode (uint256 const& hash) = 0;
 };
 
 }

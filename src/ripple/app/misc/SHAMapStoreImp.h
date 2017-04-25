@@ -27,7 +27,6 @@
 #include <condition_variable>
 #include <thread>
 
-
 namespace ripple {
 
 class NetworkOPs;
@@ -87,7 +86,7 @@ private:
     NodeStore::Scheduler& scheduler_;
     beast::Journal journal_;
     beast::Journal nodeStoreJournal_;
-    NodeStore::DatabaseRotating* database_ = nullptr;
+    NodeStore::DatabaseRotating* dbRotating_ = nullptr;
     SavedStateDB state_db_;
     std::thread thread_;
     bool stop_ = false;
@@ -203,7 +202,7 @@ private:
 
         for (auto const& key: cache.getKeys())
         {
-            database_->fetchNode (key);
+            dbRotating_->fetch(key, 0);
             if (! (++check % checkHealthInterval_) && health())
                 return true;
         }

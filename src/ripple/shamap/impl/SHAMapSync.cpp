@@ -44,12 +44,12 @@ SHAMap::visitNodes(std::function<bool (
     // Visit every node in a SHAMap
     assert (root_->isValid ());
 
-    if (!root_)
+    if (! root_)
         return;
 
     function (*root_);
 
-    if (!root_->isInner ())
+    if (! root_->isInner ())
         return;
 
     using StackEntry = std::pair <int, std::shared_ptr<SHAMapInnerNode>>;
@@ -63,7 +63,7 @@ SHAMap::visitNodes(std::function<bool (
         while (pos < 16)
         {
             uint256 childHash;
-            if (!node->isEmptyBranch (pos))
+            if (! node->isEmptyBranch (pos))
             {
                 std::shared_ptr<SHAMapAbstractNode> child = descendNoStore (node, pos);
                 if (! function (*child))
@@ -123,8 +123,7 @@ SHAMap::visitDifferences(SHAMap const* have,
     {
         auto leaf = std::static_pointer_cast<SHAMapTreeNode>(root_);
         if (! have || ! have->hasLeafNode(leaf->peekItem()->key(), leaf->getNodeHash()))
-            function(*root_);
-
+            function (*root_);
         return;
     }
     // contains unexplored non-matching inner node entries
@@ -141,7 +140,7 @@ SHAMap::visitDifferences(SHAMap const* have,
         stack.pop ();
 
         // 1) Add this node to the pack
-        if (! function(*node))
+        if (! function (*node))
             return;
 
         // 2) push non-matching child inner nodes
@@ -162,7 +161,7 @@ SHAMap::visitDifferences(SHAMap const* have,
                          static_cast<SHAMapTreeNode*>(next)->peekItem()->key(),
                          childHash))
                 {
-                    if (! function(*next))
+                    if (! function (*next))
                         return;
                 }
             }
@@ -567,7 +566,7 @@ SHAMapAddNode SHAMap::addRootNode (SHAMapHash const& hash, Slice const& rootNode
     {
         Serializer s;
         root_->addRaw (s, snfPREFIX);
-        filter->gotNode (false, root_->getNodeHash (),
+        filter->gotNode (false, root_->getNodeHash (), ledgerSeq_,
                          std::move(s.modData ()), root_->getType ());
     }
 
@@ -655,7 +654,7 @@ SHAMap::addKnownNode (const SHAMapNodeID& node, Slice const& rawNode,
             {
                 Serializer s;
                 newNode->addRaw (s, snfPREFIX);
-                filter->gotNode (false, childHash,
+                filter->gotNode (false, childHash, ledgerSeq_,
                                  std::move(s.modData ()), newNode->getType ());
             }
 
@@ -820,70 +819,6 @@ void SHAMap::getFetchPack (SHAMap const* have, bool includeLeaves, int max,
             }
             return true;
         });
-}
-
-void
-SHAMap::visitDifferences(SHAMap const* have,
-                         std::function<bool (SHAMapAbstractNode&)> func) const
-{
-    // Visit every node in this SHAMap that is not present
-    // in the specified SHAMap
-
-    if (root_->getNodeHash ().isZero ())
-        return;
-
-    if (have && (root_->getNodeHash () == have->root_->getNodeHash ()))
-        return;
-
-    if (root_->isLeaf ())
-    {
-        auto leaf = std::static_pointer_cast<SHAMapTreeNode>(root_);
-        if (!have || !have->hasLeafNode(leaf->peekItem()->key(), leaf->getNodeHash()))
-            func (*root_);
-
-        return;
-    }
-    // contains unexplored non-matching inner node entries
-    using StackEntry = std::pair <SHAMapInnerNode*, SHAMapNodeID>;
-    std::stack <StackEntry, std::vector<StackEntry>> stack;
-
-    stack.push ({static_cast<SHAMapInnerNode*>(root_.get()), SHAMapNodeID{}});
-
-    while (!stack.empty())
-    {
-        SHAMapInnerNode* node;
-        SHAMapNodeID nodeID;
-        std::tie (node, nodeID) = stack.top ();
-        stack.pop ();
-
-        // 1) Add this node to the pack
-        if (!func (*node))
-            return;
-
-        // 2) push non-matching child inner nodes
-        for (int i = 0; i < 16; ++i)
-        {
-            if (!node->isEmptyBranch (i))
-            {
-                auto const& childHash = node->getChildHash (i);
-                SHAMapNodeID childID = nodeID.getChildNodeID (i);
-                auto next = descendThrow(node, i);
-
-                if (next->isInner ())
-                {
-                    if (!have || !have->hasInnerNode(childID, childHash))
-                        stack.push ({static_cast<SHAMapInnerNode*>(next), childID});
-                }
-                else if (!have || !have->hasLeafNode(
-                         static_cast<SHAMapTreeNode*>(next)->peekItem()->key(),
-                         childHash))
-                {
-                    if (! func (*next))
-                        return;
-                }
-            }
-        }
-    }
 }
 
 } // ripple

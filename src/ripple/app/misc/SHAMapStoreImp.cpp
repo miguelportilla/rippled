@@ -23,7 +23,8 @@
 #include <ripple/app/ledger/TransactionMaster.h>
 #include <ripple/app/misc/NetworkOPs.h>
 #include <ripple/core/ConfigSections.h>
-#include <ripple/beast/core/CurrentThreadName.h>
+#include <ripple/nodestore/impl/DatabaseRotatingImp.h>
+#include <ripple/nodestore/impl/DatabaseShardImp.h>
 
 namespace ripple {
 void SHAMapStoreImp::SavedStateDB::init (BasicConfig const& config,
@@ -229,8 +230,14 @@ SHAMapStoreImp::makeDatabase (std::string const& name,
             state_db_.setState (state);
         }
 
-        database_ = dbr.get();
-        db.reset (dynamic_cast <NodeStore::Database*>(dbr.release()));
+        // Create NodeStore with two backends to allow online deletion of data
+        auto dbr = std::make_unique<NodeStore::DatabaseRotatingImp>(
+            "NodeStore.main", scheduler_, readThreads, parent,
+                std::move(writableBackend), std::move(archiveBackend),
+                    nodeStoreJournal_);
+        fdlimit_ += dbr->fdlimit();
+        dbRotating_ = dbr.get();
+        db.reset(dynamic_cast<NodeStore::Database*>(dbr.release()));
     }
     else
     {
@@ -238,7 +245,24 @@ SHAMapStoreImp::makeDatabase (std::string const& name,
             readThreads, parent, setup_.nodeDatabase, nodeStoreJournal_);
         fdlimit_ = db->fdlimit();
     }
+    return db;
+}
 
+std::unique_ptr<NodeStore::DatabaseShard>
+SHAMapStoreImp::makeDatabaseShard(std::string const& name,
+    std::int32_t readThreads, Stoppable& parent)
+{
+    std::unique_ptr<NodeStore::DatabaseShard> db;
+    if(! setup_.shardDatabase.empty())
+    {
+        db = std::make_unique<NodeStore::DatabaseShardImp>(
+            name, parent, scheduler_, readThreads,
+                setup_.shardDatabase, app_.journal("ShardStore"));
+        if (db->init())
+            fdlimit_ += db->fdlimit();
+        else
+            db.reset();
+    }
     return db;
 }
 
@@ -277,8 +301,8 @@ bool
 SHAMapStoreImp::copyNode (std::uint64_t& nodeCount,
         SHAMapAbstractNode const& node)
 {
-    // Copy a single record from node to database_
-    database_->fetchNode (node.getNodeHash().as_uint256());
+    // Copy a single record from node to dbRotating_
+    dbRotating_->fetch(node.getNodeHash().as_uint256(), node.getSeq());
     if (! (++nodeCount % checkHealthInterval_))
     {
         if (health())
@@ -419,15 +443,15 @@ SHAMapStoreImp::run()
             }
 
             std::string nextArchiveDir =
-                    database_->getWritableBackend()->getName();
+                dbRotating_->getWritableBackend()->getName();
             lastRotated = validatedSeq;
             {
-                std::lock_guard <std::mutex> lock (database_->peekMutex());
+                std::lock_guard <std::mutex> lock (dbRotating_->peekMutex());
 
                 state_db_.setState (SavedState {newBackend->getName(),
                         nextArchiveDir, lastRotated});
                 clearCaches (validatedSeq);
-                oldBackend = database_->rotateBackends (newBackend);
+                oldBackend = dbRotating_->rotateBackends (newBackend);
             }
             JLOG(journal_.debug()) << "finished rotation " << validatedSeq;
 
@@ -583,7 +607,7 @@ SHAMapStoreImp::clearCaches (LedgerIndex validatedSeq)
 void
 SHAMapStoreImp::freshenCaches()
 {
-    if (freshenCache (database_->getPositiveCache()))
+    if (freshenCache (dbRotating_->getPositiveCache()))
         return;
     if (freshenCache (*treeNodeCache_))
         return;

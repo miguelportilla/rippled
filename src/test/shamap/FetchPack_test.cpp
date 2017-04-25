@@ -60,14 +60,16 @@ public:
         {
         }
 
-        void gotNode (bool fromFilter,
-            SHAMapHash const& nodeHash,
-                Blob&& nodeData, SHAMapTreeNode::TNType type) const override
+        void
+        gotNode(bool fromFilter, SHAMapHash const& nodeHash,
+            std::uint32_t ledgerSeq, Blob&& nodeData,
+                SHAMapTreeNode::TNType type) const override
         {
         }
 
         boost::optional<Blob>
-        getNode (SHAMapHash const& nodeHash) const override
+        getNode (SHAMapHash const& nodeHash,
+            std::uint32_t ledgerSeq) const override
         {
             Map::iterator it = mMap.find (nodeHash);
             if (it == mMap.end ())

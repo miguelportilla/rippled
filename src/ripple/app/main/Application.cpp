@@ -77,6 +77,8 @@ private:
     TreeNodeCache treecache_;
     FullBelowCache fullbelow_;
     NodeStore::Database& db_;
+    InboundLedger::Reason const reason_;
+    bool const shardBacked_;
     beast::Journal j_;
 
     // missing node handler
@@ -95,7 +97,7 @@ private:
                 "Missing node in " << to_string (hash);
 
             app_.getInboundLedgers ().acquire (
-                hash, seq, InboundLedger::fcGENERIC);
+                hash, seq, reason_);
         }
     }
 
@@ -104,7 +106,8 @@ public:
     AppFamily& operator= (AppFamily const&) = delete;
 
     AppFamily (Application& app, NodeStore::Database& db,
-            CollectorManager& collectorManager)
+            CollectorManager& collectorManager,
+                InboundLedger::Reason acquireReason)
         : app_ (app)
         , treecache_ ("TreeNodeCache", 65536, 60, stopwatch(),
             app.journal("TaggedCache"))
@@ -112,6 +115,9 @@ public:
             collectorManager.collector(),
                 fullBelowTargetSize, fullBelowExpirationSeconds)
         , db_ (db)
+        , reason_ (acquireReason)
+        , shardBacked_ (
+            dynamic_cast<NodeStore::DatabaseShard*>(&db) != nullptr)
         , j_ (app.journal("SHAMap"))
     {
     }
@@ -158,6 +164,12 @@ public:
         return db_;
     }
 
+    bool
+    isShardBacked() const override
+    {
+        return shardBacked_;
+    }
+
     void
     missing_node (std::uint32_t seq) override
     {
@@ -198,9 +210,9 @@ public:
     }
 
     void
-    missing_node (uint256 const& hash) override
+    missing_node (uint256 const& hash, std::uint32_t seq) override
     {
-        acquire (hash, 0);
+        acquire (hash, seq);
     }
 };
 
@@ -316,6 +328,7 @@ public:
     std::unique_ptr <JobQueue> m_jobQueue;
     std::unique_ptr <NodeStore::Database> m_nodeStore;
     detail::AppFamily family_;
+    std::unique_ptr <detail::AppFamily> sFamily_;
     // VFALCO TODO Make OrderBookDB abstract
     OrderBookDB m_orderBookDB;
     std::unique_ptr <PathRequests> m_pathRequests;
@@ -418,7 +431,11 @@ public:
         , m_nodeStore (
             m_shaMapStore->makeDatabase ("NodeStore.main", 4, *m_jobQueue))
 
-        , family_ (*this, *m_nodeStore, *m_collectorManager)
+        , m_shardStore (
+            m_shaMapStore->makeDatabaseShard ("ShardStore", 4, *m_jobQueue))
+
+        , family_ (*this, *m_nodeStore, *m_collectorManager,
+            InboundLedger::Reason::GENERIC)
 
         , m_orderBookDB (*this, *m_jobQueue)
 
@@ -500,6 +517,10 @@ public:
         , m_io_latency_sampler (m_collectorManager->collector()->make_event ("ios_latency"),
             logs_->journal("Application"), std::chrono::milliseconds (100), get_io_service())
     {
+        if (m_shardStore)
+            sFamily_ = std::make_unique<detail::AppFamily>(
+                *this, *m_shardStore, *m_collectorManager,
+                    InboundLedger::Reason::SHARD);
         add (m_resourceManager.get ());
 
         //
@@ -553,10 +574,14 @@ public:
         return *m_collectorManager;
     }
 
-    Family&
-    family() override
+    Family& family() override
     {
         return family_;
+    }
+
+    Family* shardFamily() override
+    {
+        return sFamily_.get();
     }
 
     TimeKeeper&
@@ -995,7 +1020,9 @@ public:
         // VFALCO TODO fix the dependency inversion using an observer,
         //         have listeners register for "onSweep ()" notification.
 
-        family().fullbelow().sweep ();
+        family().fullbelow().sweep();
+        if (sFamily_)
+            sFamily_->fullbelow().sweep();
         getMasterTransaction().sweep();
         getNodeStore().sweep();
         getLedgerMaster().sweep();
@@ -1004,6 +1031,8 @@ public:
         getInboundLedgers().sweep();
         m_acceptedLedgerCache.sweep();
         family().treecache().sweep();
+        if (sFamily_)
+            sFamily_->treecache().sweep();
         cachedSLEs_.expire();
 
         // Set timer to do another sweep later.
@@ -1024,6 +1053,7 @@ private:
     void addTxnSeqField();
     void addValidationSeqFields();
     bool updateTables ();
+    bool validateShards ();
     void startGenesisLedger ();
 
     std::shared_ptr<Ledger>
@@ -1209,6 +1239,14 @@ bool ApplicationImp::setup()
     m_ledgerMaster->tune (config_->getSize (siLedgerSize), config_->getSize (siLedgerAge));
     family().treecache().setTargetSize (config_->getSize (siTreeCacheSize));
     family().treecache().setTargetAge (config_->getSize (siTreeCacheAge));
+    if (sFamily_)
+    {
+        sFamily_->treecache().setTargetSize(config_->getSize(siTreeCacheSize));
+        sFamily_->treecache().setTargetAge(config_->getSize(siTreeCacheAge));
+    }
+
+    if (config_->valShards && !validateShards())
+        return false;
 
     //----------------------------------------------------------------------
     //
@@ -1622,7 +1660,7 @@ bool ApplicationImp::loadOldLedger (
                 {
                     // Try to build the ledger from the back end
                     auto il = std::make_shared <InboundLedger> (
-                        *this, hash, 0, InboundLedger::fcGENERIC,
+                        *this, hash, 0, InboundLedger::Reason::GENERIC,
                         stopwatch());
                     if (il->checkLocal ())
                         loadLedger = il->getLedger ();
@@ -1662,7 +1700,7 @@ bool ApplicationImp::loadOldLedger (
                 // Try to build the ledger from the back end
                 auto il = std::make_shared <InboundLedger> (
                     *this, replayLedger->info().parentHash,
-                    0, InboundLedger::fcGENERIC, stopwatch());
+                    0, InboundLedger::Reason::GENERIC, stopwatch());
 
                 if (il->checkLocal ())
                     loadLedger = il->getLedger ();
@@ -2003,6 +2041,24 @@ bool ApplicationImp::updateTables ()
         getNodeStore().import (*source);
     }
 
+    return true;
+}
+
+bool ApplicationImp::validateShards()
+{
+    if (config_->section(ConfigSection::shardDatabase()).empty())
+    {
+        JLOG (m_journal.fatal()) <<
+            "The [shard_db] configuration setting must be set";
+        return false;
+    }
+    if (!m_shardStore)
+    {
+        JLOG(m_journal.fatal()) <<
+            "Invalid [shard_db] configuration";
+        return false;
+    }
+    m_shardStore->validate(*this);
     return true;
 }
 

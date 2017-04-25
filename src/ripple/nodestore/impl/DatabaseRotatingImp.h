@@ -20,15 +20,12 @@
 #ifndef RIPPLE_NODESTORE_DATABASEROTATINGIMP_H_INCLUDED
 #define RIPPLE_NODESTORE_DATABASEROTATINGIMP_H_INCLUDED
 
-#include <ripple/nodestore/impl/DatabaseImp.h>
 #include <ripple/nodestore/DatabaseRotating.h>
 
 namespace ripple {
 namespace NodeStore {
 
-class DatabaseRotatingImp
-    : public DatabaseImp
-    , public DatabaseRotating
+class DatabaseRotatingImp : public DatabaseRotating
 {
 private:
     std::shared_ptr <Backend> writableBackend_;
@@ -47,28 +44,20 @@ private:
     }
 
 public:
-    DatabaseRotatingImp (std::string const& name,
-                 Scheduler& scheduler,
-                 int readThreads,
-                 Stoppable& parent,
-                 std::shared_ptr <Backend> writableBackend,
-                 std::shared_ptr <Backend> archiveBackend,
-                 beast::Journal journal)
-            : DatabaseImp (
-                name,
-                scheduler,
-                readThreads,
-                parent,
-                std::unique_ptr <Backend>(),
-                journal)
-            , writableBackend_ (writableBackend)
-            , archiveBackend_ (archiveBackend)
-    {}
+    DatabaseRotatingImp() = delete;
+    DatabaseRotatingImp(DatabaseRotatingImp const&) = delete;
+    DatabaseRotatingImp& operator=(DatabaseRotatingImp const&) = delete;
 
-    ~DatabaseRotatingImp () override
+    DatabaseRotatingImp(std::string const& name,
+        Scheduler& scheduler, int readThreads, Stoppable& parent,
+            std::shared_ptr <Backend> writableBackend,
+                 std::shared_ptr <Backend> archiveBackend,
+                    beast::Journal journal);
+
+    ~DatabaseRotatingImp() override
     {
         // Stop threads before data members are destroyed.
-        DatabaseImp::stopThreads ();
+        stopThreads();
     }
 
     std::shared_ptr <Backend> const& getWritableBackend() const override
@@ -85,6 +74,7 @@ public:
 
     std::shared_ptr <Backend> rotateBackends (
             std::shared_ptr <Backend> const& newBackend) override;
+
     std::mutex& peekMutex() const override
     {
         return rotateMutex_;
@@ -112,24 +102,22 @@ public:
         importInternal (source, *getWritableBackend());
     }
 
-    void store (NodeObjectType type,
-                Blob&& data,
-                uint256 const& hash) override
+    void store(NodeObjectType type, Blob&& data,
+        uint256 const& hash, std::uint32_t seq) override
     {
-        storeInternal (type, std::move(data), hash,
-                *getWritableBackend());
+        storeInternal(type, std::move(data), hash, *getWritableBackend());
     }
 
-    std::shared_ptr<NodeObject> fetchNode (uint256 const& hash) override
-    {
-        return fetchFrom (hash);
-    }
+    bool copyLedger(std::shared_ptr<Ledger const> const& ledger) override;
 
-    std::shared_ptr<NodeObject> fetchFrom (uint256 const& hash) override;
     TaggedCache <uint256, NodeObject>& getPositiveCache() override
     {
-        return m_cache;
+        return pCache_;
     }
+
+private:
+    std::shared_ptr<NodeObject> fetchFrom(
+        uint256 const& hash, std::uint32_t seq) override;
 };
 
 }

@@ -48,6 +48,12 @@ enum Status
 
 /** A batch of NodeObjects to write at once. */
 using Batch = std::vector <std::shared_ptr<NodeObject>>;
+
+static constexpr std::uint32_t genesisSeq{32570u};
+
+/** The number of ledgers stored in a shard. */
+static constexpr std::uint32_t ledgersPerShard{16384u};
+
 }
 }
 
