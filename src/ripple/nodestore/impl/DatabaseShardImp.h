@@ -24,10 +24,14 @@
 #include <ripple/nodestore/impl/Shard.h>
 
 namespace ripple {
+
+class DatabaseShard_test;
+
 namespace NodeStore {
 
 class DatabaseShardImp : public DatabaseShard
 {
+    friend class ripple::DatabaseShard_test;
 public:
     DatabaseShardImp() = delete;
     DatabaseShardImp(DatabaseShardImp const&) = delete;

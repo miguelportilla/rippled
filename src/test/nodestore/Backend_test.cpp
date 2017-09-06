@@ -20,10 +20,6 @@
 #include <BeastConfig.h>
 #include <ripple/unity/rocksdb.h>
 #include <test/nodestore/TestBase.h>
-#include <ripple/nodestore/DummyScheduler.h>
-#include <ripple/nodestore/Manager.h>
-#include <ripple/beast/utility/temp_dir.h>
-#include <algorithm>
 
 namespace ripple {
 namespace NodeStore {
@@ -33,84 +29,11 @@ namespace NodeStore {
 class Backend_test : public TestBase
 {
 public:
-    void testBackend (
-        std::string const& type,
-        std::uint64_t const seedValue,
-        int numObjectsToTest = 2000)
-    {
-        DummyScheduler scheduler;
-
-        testcase ("Backend type=" + type);
-
-        Section params;
-        beast::temp_dir tempDir;
-        params.set ("type", type);
-        params.set ("path", tempDir.path());
-
-        beast::xor_shift_engine rng (seedValue);
-
-        // Create a batch
-        auto batch = createPredictableBatch (
-            numObjectsToTest, rng());
-
-        beast::Journal j;
-
-        {
-            // Open the backend
-            std::unique_ptr <Backend> backend =
-                Manager::instance().make_Backend (params, scheduler, j);
-
-            // Write the batch
-            storeBatch (*backend, batch);
-
-            {
-                // Read it back in
-                Batch copy;
-                fetchCopyOfBatch (*backend, &copy, batch);
-                BEAST_EXPECT(areBatchesEqual (batch, copy));
-            }
-
-            {
-                // Reorder and read the copy again
-                std::shuffle (
-                    batch.begin(),
-                    batch.end(),
-                    rng);
-                Batch copy;
-                fetchCopyOfBatch (*backend, &copy, batch);
-                BEAST_EXPECT(areBatchesEqual (batch, copy));
-            }
-        }
-
-        {
-            // Re-open the backend
-            std::unique_ptr <Backend> backend = Manager::instance().make_Backend (
-                params, scheduler, j);
-
-            // Read it back in
-            Batch copy;
-            fetchCopyOfBatch (*backend, &copy, batch);
-            // Canonicalize the source and destination batches
-            std::sort (batch.begin (), batch.end (), LessThan{});
-            std::sort (copy.begin (), copy.end (), LessThan{});
-            BEAST_EXPECT(areBatchesEqual (batch, copy));
-        }
-    }
-
-    //--------------------------------------------------------------------------
-
     void run ()
     {
-        std::uint64_t const seedValue = 50;
-
-        testBackend ("nudb", seedValue);
-
+        testNodeStore<Backend> ("nudb");
     #if RIPPLE_ROCKSDB_AVAILABLE
-        testBackend ("rocksdb", seedValue);
-    #endif
-
-    #ifdef RIPPLE_ENABLE_SQLITE_BACKEND_TESTS
-        testBackend ("sqlite", seedValue);
+        testNodeStore<Backend> ("rocksdb");
     #endif
     }
 };

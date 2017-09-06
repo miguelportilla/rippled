@@ -60,9 +60,9 @@ public:
             numObjectsToTest, seedValue);
 
         EncodedBlob encoded;
-        for (int i = 0; i < batch.size (); ++i)
+        for (auto const& b : batch)
         {
-            encoded.prepare (batch [i]);
+            encoded.prepare (b.second);
 
             DecodedBlob decoded (encoded.getKey (), encoded.getData (), encoded.getSize ());
 
@@ -72,7 +72,7 @@ public:
             {
                 std::shared_ptr<NodeObject> const object (decoded.createObject ());
 
-                BEAST_EXPECT(isSame(batch[i], object));
+                BEAST_EXPECT(isSame(b.second, object));
             }
         }
     }

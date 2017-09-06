@@ -30,7 +30,7 @@ class Database_test : public TestBase
 {
 public:
     void testImport (std::string const& destBackendType,
-        std::string const& srcBackendType, std::int64_t seedValue)
+        std::string const& srcBackendType, std::int64_t seedValue = 50)
     {
         DummyScheduler scheduler;
         RootStoppable parent ("TestRootStoppable");
@@ -50,10 +50,10 @@ public:
         {
             std::unique_ptr <Database> src = Manager::instance().make_Database (
                 "test", scheduler, 2, parent, srcParams, j);
-            storeBatch (*src, batch);
+            storeBatch (*this, *src, batch);
         }
 
-        Batch copy;
+        SeqBatch copy;
 
         {
             // Re-open the db
@@ -79,122 +79,27 @@ public:
             fetchCopyOfBatch (*dest, &copy, batch);
         }
 
-        // Canonicalize the source and destination batches
+        // Canonicalize the source and destinaion batches
         std::sort (batch.begin (), batch.end (), LessThan{});
         std::sort (copy.begin (), copy.end (), LessThan{});
         BEAST_EXPECT(areBatchesEqual (batch, copy));
     }
 
-    //--------------------------------------------------------------------------
-
-    void testNodeStore (std::string const& type,
-                        bool const testPersistence,
-                        std::int64_t const seedValue,
-                        int numObjectsToTest = 2000)
-    {
-        DummyScheduler scheduler;
-        RootStoppable parent ("TestRootStoppable");
-
-        std::string s = "NodeStore backend '" + type + "'";
-
-        testcase (s);
-
-        beast::temp_dir node_db;
-        Section nodeParams;
-        nodeParams.set ("type", type);
-        nodeParams.set ("path", node_db.path());
-
-        beast::xor_shift_engine rng (seedValue);
-
-        // Create a batch
-        auto batch = createPredictableBatch (
-            numObjectsToTest, rng());
-
-        beast::Journal j;
-
-        {
-            // Open the database
-            std::unique_ptr <Database> db = Manager::instance().make_Database (
-                "test", scheduler, 2, parent, nodeParams, j);
-
-            // Write the batch
-            storeBatch (*db, batch);
-
-            {
-                // Read it back in
-                Batch copy;
-                fetchCopyOfBatch (*db, &copy, batch);
-                BEAST_EXPECT(areBatchesEqual (batch, copy));
-            }
-
-            {
-                // Reorder and read the copy again
-                std::shuffle (
-                    batch.begin(),
-                    batch.end(),
-                    rng);
-                Batch copy;
-                fetchCopyOfBatch (*db, &copy, batch);
-                BEAST_EXPECT(areBatchesEqual (batch, copy));
-            }
-        }
-
-        if (testPersistence)
-        {
-            {
-                // Re-open the database without the ephemeral DB
-                std::unique_ptr <Database> db = Manager::instance().make_Database (
-                    "test", scheduler, 2, parent, nodeParams, j);
-
-                // Read it back in
-                Batch copy;
-                fetchCopyOfBatch (*db, &copy, batch);
-
-                // Canonicalize the source and destination batches
-                std::sort (batch.begin (), batch.end (), LessThan{});
-                std::sort (copy.begin (), copy.end (), LessThan{});
-                BEAST_EXPECT(areBatchesEqual (batch, copy));
-            }
-        }
-    }
-
-    //--------------------------------------------------------------------------
-
-    void runBackendTests (std::int64_t const seedValue)
-    {
-        testNodeStore ("nudb", true, seedValue);
-
-    #if RIPPLE_ROCKSDB_AVAILABLE
-        testNodeStore ("rocksdb", true, seedValue);
-    #endif
-    }
-
-    //--------------------------------------------------------------------------
-
-    void runImportTests (std::int64_t const seedValue)
-    {
-        testImport ("nudb", "nudb", seedValue);
-
-    #if RIPPLE_ROCKSDB_AVAILABLE
-        testImport ("rocksdb", "rocksdb", seedValue);
-    #endif
-
-    #if RIPPLE_ENABLE_SQLITE_BACKEND_TESTS
-        testImport ("sqlite", "sqlite", seedValue);
-    #endif
-    }
 
     //--------------------------------------------------------------------------
 
     void run ()
     {
-        std::int64_t const seedValue = 50;
+        testNodeStore<Database> ("memory");
+        testNodeStore<Database> ("nudb");
+    #if RIPPLE_ROCKSDB_AVAILABLE
+        testNodeStore<Database> ("rocksdb");
+    #endif
 
-        testNodeStore ("memory", false, seedValue);
-
-        runBackendTests (seedValue);
-
-        runImportTests (seedValue);
+        testImport ("nudb",    "nudb");
+    #if RIPPLE_ROCKSDB_AVAILABLE
+        testImport ("rocksdb", "rocksdb");
+    #endif
     }
 };
 

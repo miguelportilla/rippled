@@ -5592,6 +5592,9 @@
     <ClCompile Include="..\..\src\test\nodestore\Basics_test.cpp">
       <Filter>test\nodestore</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\src\test\nodestore\DatabaseShard_test.cpp">
+      <Filter>test\nodestore</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\src\test\nodestore\Database_test.cpp">
       <Filter>test\nodestore</Filter>
     </ClCompile>

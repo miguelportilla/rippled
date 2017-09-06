@@ -287,9 +287,22 @@ Shard::updateFileSize()
 {
     fileSize_ = 0;
     using namespace boost::filesystem;
+    boost::system::error_code ec;
+    std::uint64_t fs;
+    // using error code handling here...sometimes files in these directories can
+    // be moving targets
     for (auto const& de : directory_iterator(dir_))
-        if (is_regular_file(de))
-            fileSize_ += file_size(de);
+    {
+        if (is_regular_file(de, ec))
+        {
+            if (ec) // TODO - warn log this ?
+                continue;
+            fs = file_size(de, ec);
+            if (ec) // TODO - warn log this ?
+                continue;
+            fileSize_ += fs;
+        }
+    }
 }
 
 bool

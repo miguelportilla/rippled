@@ -1,8 +1,7 @@
-
 //------------------------------------------------------------------------------
 /*
     This file is part of rippled: https://github.com/ripple/rippled
-    Copyright (c) 2012, 2013 Ripple Labs Inc.
+    Copyright (c) 2017 Ripple Labs Inc.
 
     Permission to use, copy, modify, and/or distribute this software for any
     purpose  with  or without fee is hereby granted, provided that the above
@@ -18,10 +17,35 @@
 */
 //==============================================================================
 
-#include <test/nodestore/Backend_test.cpp>
-#include <test/nodestore/Basics_test.cpp>
-#include <test/nodestore/Database_test.cpp>
-#include <test/nodestore/DatabaseShard_test.cpp>
-#include <test/nodestore/import_test.cpp>
-#include <test/nodestore/Timing_test.cpp>
-#include <test/nodestore/varint_test.cpp>
+#include <BeastConfig.h>
+#include <test/nodestore/TestBase.h>
+
+namespace ripple {
+
+using namespace NodeStore;
+
+class DatabaseShard_test : public TestBase
+{
+
+public:
+    void run ()
+    {
+        testNodeStore<DatabaseShard> ("nudb");
+        testNodeStore<DatabaseShard> ("nudb", ledgersPerShard);
+        testNodeStore<DatabaseShard> ("nudb", ledgersPerShard + 1);
+        testNodeStore<DatabaseShard> ("nudb", ledgersPerShard * 2 - 1);
+        testNodeStore<DatabaseShard> ("nudb", ledgersPerShard * 2);
+    #if RIPPLE_ROCKSDB_AVAILABLE
+        testNodeStore<DatabaseShard> ("rocksdb");
+        testNodeStore<DatabaseShard> ("rocksdb", ledgersPerShard);
+        testNodeStore<DatabaseShard> ("rocksdb", ledgersPerShard + 1);
+        testNodeStore<DatabaseShard> ("rocksdb", ledgersPerShard * 2 - 1);
+        testNodeStore<DatabaseShard> ("rocksdb", ledgersPerShard * 2);
+    #endif
+
+    }
+};
+
+BEAST_DEFINE_TESTSUITE(DatabaseShard,shard,ripple);
+
+}
