@@ -1068,6 +1068,7 @@ private:
     void addTxnSeqField();
     void addValidationSeqFields();
     bool updateTables ();
+    bool validateShards ();
     void startGenesisLedger ();
 
     std::shared_ptr<Ledger>
@@ -1276,6 +1277,9 @@ bool ApplicationImp::setup()
         *serverHandler_, *m_resourceManager, *m_resolver, get_io_service(),
         *config_);
     add (*m_overlay); // add to PropertyStream
+
+    if (config_->valShards && !validateShards())
+        return false;
 
     validatorSites_->start ();
 
@@ -2054,6 +2058,32 @@ bool ApplicationImp::updateTables ()
         getNodeStore().import (*source);
     }
 
+    return true;
+}
+
+bool ApplicationImp::validateShards()
+{
+    if (!m_overlay)
+        Throw<std::runtime_error>("no overlay");
+    if(config_->standalone())
+    {
+        JLOG(m_journal.fatal()) <<
+            "Shard validation cannot be run in standalone";
+        return false;
+    }
+    if (config_->section(ConfigSection::shardDatabase()).empty())
+    {
+        JLOG (m_journal.fatal()) <<
+            "The [shard_db] configuration setting must be set";
+        return false;
+    }
+    if (!shardStore_)
+    {
+        JLOG(m_journal.fatal()) <<
+            "Invalid [shard_db] configuration";
+        return false;
+    }
+    shardStore_->validate();
     return true;
 }
 

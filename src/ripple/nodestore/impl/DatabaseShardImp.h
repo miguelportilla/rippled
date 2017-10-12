@@ -57,6 +57,9 @@ public:
     std::string
     getCompleteShards() override;
 
+    void
+    validate() override;
+
     std::string
     getName() const override
     {

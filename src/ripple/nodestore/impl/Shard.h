@@ -87,6 +87,9 @@ public:
     bool
     hasLedger(std::uint32_t seq) const;
 
+    void
+    validate(Application& app);
+
     std::uint32_t
     index() const {return index_;}
 
@@ -165,6 +168,13 @@ private:
 
     // Used as an optimization for visitDifferences
     std::shared_ptr<Ledger const> lastStored_;
+
+    bool
+    valLedger(std::shared_ptr<Ledger const> const& l,
+        std::shared_ptr<Ledger const> const& next);
+
+    std::shared_ptr<NodeObject>
+    valFetch(uint256 const& hash);
 
     void
     updateFileSize();

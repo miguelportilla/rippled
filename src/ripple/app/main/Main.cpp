@@ -213,6 +213,12 @@ int run (int argc, char** argv)
         importText += ConfigSection::nodeDatabase ();
         importText += "] configuration file section).";
     }
+    std::string shardsText;
+    {
+        shardsText += "Validate an existing shard database (specified in the [";
+        shardsText += ConfigSection::shardDatabase();
+        shardsText += "] configuration file section).";
+    }
 
     // Set up option parsing.
     //
@@ -242,6 +248,7 @@ int run (int argc, char** argv)
     ("debug", "Enable normally suppressed debug logging")
     ("fg", "Run in the foreground.")
     ("import", importText.c_str ())
+    ("shards", shardsText.c_str ())
     ("version", "Display the build version.")
     ;
 
@@ -315,6 +322,9 @@ int run (int argc, char** argv)
 
     if (vm.count ("import"))
         config->doImport = true;
+
+    if (vm.count ("shards"))
+        config->valShards = true;
 
     if (vm.count ("ledger"))
     {

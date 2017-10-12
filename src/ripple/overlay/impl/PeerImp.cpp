@@ -2160,7 +2160,7 @@ PeerImp::getLedger (std::shared_ptr<protocol::TMGetLedger> const& m)
                 {
                     seq = packet.ledgerseq();
                     if (auto shardStore = app_.getShardStore())
-                        ledger = shardStore->fetchLedger(app_, ledgerhash, seq);
+                        ledger = shardStore->fetchLedger(ledgerhash, seq);
                 }
                 if (! ledger)
                 {

@@ -173,6 +173,238 @@ Shard::hasLedger(std::uint32_t seq) const
 }
 
 void
+Shard::validate(Application& app)
+{
+    uint256 hash;
+    std::uint32_t seq;
+    std::shared_ptr<Ledger> l;
+    // Find the hash of the last ledger in this shard
+    {
+        std::tie(l, seq, hash) = loadLedgerHelper(
+            "WHERE LedgerSeq >= " + std::to_string(lastSeq_) +
+            " order by LedgerSeq desc limit 1", app);
+        if (!l)
+        {
+            JLOG(j_.fatal()) <<
+                "shard " << std::to_string(index_) <<
+                " unable to validate. No lookup data";
+            return;
+        }
+        if (seq != lastSeq_)
+        {
+            l->setImmutable(app.config());
+            boost::optional<uint256> h;
+            try
+            {
+                h = hashOfSeq(*l, lastSeq_, j_);
+            }
+            catch (std::exception const& e)
+            {
+                JLOG(j_.fatal()) <<
+                    "exception: " << e.what();
+                return;
+            }
+            if (!h)
+            {
+                JLOG(j_.fatal()) <<
+                    "shard " << std::to_string(index_) <<
+                    " No hash for last ledger seq " <<
+                    std::to_string(lastSeq_);
+                return;
+            }
+            hash = *h;
+            seq = lastSeq_;
+        }
+    }
+
+    JLOG(j_.fatal()) <<
+        "Validating shard " << std::to_string(index_) <<
+        " ledgers " << std::to_string(firstSeq_) << "-" <<
+        std::to_string(lastSeq_);
+
+    // Use a short age to keep memory consumption low
+    TaggedCache<uint256, NodeObject>::clock_type::rep const savedAge {
+        pCache_.getTargetAge()};
+    pCache_.setTargetAge(1);
+
+    // Validate every ledger stored in this shard
+    std::shared_ptr<Ledger const> next;
+    while (seq >= firstSeq_)
+    {
+        auto nObj = valFetch(hash);
+        if (!nObj)
+            break;
+        l = std::make_shared<Ledger>(
+            InboundLedger::deserializeHeader(makeSlice(nObj->getData()),
+                true), app.config(), *app.shardFamily());
+        if (l->info().hash != hash || l->info().seq != seq)
+        {
+            JLOG(j_.fatal()) <<
+                "ledger seq " << std::to_string(seq) <<
+                " hash " << hash <<
+                " cannot be a ledger";
+            break;
+        }
+        l->stateMap().setLedgerSeq(seq);
+        l->txMap().setLedgerSeq(seq);
+        l->setImmutable(app.config());
+        if (!l->stateMap().fetchRoot(
+            SHAMapHash {l->info().accountHash}, nullptr))
+        {
+            JLOG(j_.fatal()) <<
+                "ledger seq " << std::to_string(seq) <<
+                " missing Account State root";
+            break;
+        }
+        if (l->info().txHash.isNonZero())
+        {
+            if (!l->txMap().fetchRoot(
+                SHAMapHash {l->info().txHash}, nullptr))
+            {
+                JLOG(j_.fatal()) <<
+                    "ledger seq " << std::to_string(seq) <<
+                    " missing TX root";
+                break;
+            }
+        }
+        if (!valLedger(l, next))
+            break;
+        hash = l->info().parentHash;
+        --seq;
+        next = l;
+        if (seq % 128 == 0)
+            pCache_.sweep();
+    }
+    if (seq < firstSeq_)
+    {
+        JLOG(j_.fatal()) <<
+            "shard " << std::to_string(index_) <<
+            " is complete.";
+    }
+    else if (complete_)
+    {
+        JLOG(j_.fatal()) <<
+            "shard " << std::to_string(index_) <<
+            " is invalid, failed on seq " << std::to_string(seq) <<
+            " hash " << to_string(hash);
+    }
+    else
+    {
+        JLOG(j_.fatal()) <<
+            "shard " << std::to_string(index_) <<
+            " is incomplete, stopped at seq " << std::to_string(seq) <<
+            " hash " << to_string(hash);
+    }
+
+    pCache_.reset();
+    nCache_.reset();
+    pCache_.setTargetAge(savedAge);
+}
+
+bool
+Shard::valLedger(std::shared_ptr<Ledger const> const& l,
+    std::shared_ptr<Ledger const> const& next)
+{
+    if (l->info().hash.isZero() || l->info().accountHash.isZero())
+    {
+        JLOG(j_.fatal()) <<
+            "invalid ledger";
+        return false;
+    }
+    bool error {false};
+    auto f = [&, this](SHAMapAbstractNode& node) {
+        if (!valFetch(node.getNodeHash().as_uint256()))
+            error = true;
+        return !error;
+    };
+    // Validate the state map
+    if (l->stateMap().getHash().isNonZero())
+    {
+        if (!l->stateMap().isValid())
+        {
+            JLOG(j_.error()) <<
+                "invalid state map";
+            return false;
+        }
+        try
+        {
+            if (next && next->info().parentHash == l->info().hash)
+                l->stateMap().visitDifferences(&next->stateMap(), f);
+            else
+                l->stateMap().visitNodes(f);
+        }
+        catch (std::exception const& e)
+        {
+            JLOG(j_.fatal()) <<
+                "exception: " << e.what();
+            return false;
+        }
+        if (error)
+            return false;
+    }
+    // Validate the tx map
+    if (l->info().txHash.isNonZero())
+    {
+        if (!l->txMap().isValid())
+        {
+            JLOG(j_.error()) <<
+                "invalid transaction map";
+            return false;
+        }
+        try
+        {
+            l->txMap().visitNodes(f);
+        }
+        catch (std::exception const& e)
+        {
+            JLOG(j_.fatal()) <<
+                "exception: " << e.what();
+            return false;
+        }
+        if (error)
+            return false;
+    }
+    return true;
+};
+
+std::shared_ptr<NodeObject>
+Shard::valFetch(uint256 const& hash)
+{
+    std::shared_ptr<NodeObject> nObj;
+    try
+    {
+        switch (backend_->fetch(hash.begin(), &nObj))
+        {
+        case ok:
+            break;
+        case notFound:
+        {
+            JLOG(j_.fatal()) <<
+                "NodeObject not found. hash " << hash;
+            break;
+        }
+        case dataCorrupt:
+        {
+            JLOG(j_.fatal()) <<
+                "NodeObject is corrupt. hash " << hash;
+            break;
+        }
+        default:
+        {
+            JLOG(j_.fatal()) <<
+                "unknown error. hash " << hash;
+        }
+        }
+    }
+    catch (std::exception const& e)
+    {
+        JLOG(j_.fatal()) <<
+            "exception: " << e.what();
+    }
+    return nObj;
+}
+
+void
 Shard::updateFileSize()
 {
     fileSize_ = 0;

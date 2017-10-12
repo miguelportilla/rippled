@@ -119,6 +119,14 @@ public:
     virtual
     std::string
     getCompleteShards() = 0;
+
+    /** Verifies shard store data is valid.
+
+        @param app The application object
+    */
+    virtual
+    void
+    validate() = 0;
 };
 
 }
