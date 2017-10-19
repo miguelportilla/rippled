@@ -131,7 +131,7 @@ private:
     std::uint64_t usedDiskSpace_ {0};
 
     // Average disk space a shard requires (in bytes)
-    std::uint64_t avgShardSz_ {ledgersPerShard * (192 * 1024)};
+    std::uint64_t avgShardSz_;
 
     // Shard cache tuning
     int cacheSz_ {shardCacheSz};

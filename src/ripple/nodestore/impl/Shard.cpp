@@ -19,7 +19,8 @@
 
 #include <BeastConfig.h>
 #include <ripple/nodestore/impl/Shard.h>
-#include <ripple/app/ledger/InboundLedgers.h>
+#include <ripple/app/ledger/InboundLedger.h>
+#include <ripple/nodestore/impl/DatabaseShardImp.h>
 #include <ripple/nodestore/Manager.h>
 
 namespace ripple {
@@ -28,15 +29,16 @@ namespace NodeStore {
 Shard::Shard(std::uint32_t index, int cacheSz,
     int cacheAge, beast::Journal& j)
     : index_(index)
-    , firstSeq_(std::max(genesisSeq, detail::firstSeq(index)))
-    , lastSeq_(detail::lastSeq(index))
+    , firstSeq_(std::max(detail::genesisSeq,
+        DatabaseShard::firstSeq(index)))
+    , lastSeq_(DatabaseShard::lastSeq(index))
     , pCache_("shard " + std::to_string(index_),
         cacheSz, cacheAge, stopwatch(), j)
     , nCache_("shard " + std::to_string(index_),
         stopwatch(), cacheSz, cacheAge)
     , j_(j)
 {
-    assert(index_ >= detail::genesisShardIndex);
+    assert(index_ >= DatabaseShard::seqToShardIndex(detail::genesisSeq));
 }
 
 bool
@@ -92,9 +94,17 @@ Shard::open(Section config, Scheduler& scheduler,
                     " invalid control file";
                 return false;
             }
+
+            auto const genesisShardIndex {
+                DatabaseShard::seqToShardIndex(detail::genesisSeq)};
+            auto const genesisNumLedgers {
+                DatabaseShard::ledgersPerShard() - (
+                    detail::genesisSeq - DatabaseShardImp::firstSeq(
+                        DatabaseShardImp::seqToShardIndex(
+                            detail::genesisSeq)))};
             if (boost::icl::length(storedSeqs_) ==
-                (index_ == detail::genesisShardIndex ?
-                    detail::genesisNumLedgers : ledgersPerShard))
+                (index_ == genesisShardIndex ? genesisNumLedgers :
+                    DatabaseShard::ledgersPerShard()))
             {
                 JLOG(j_.error()) <<
                     "shard " << std::to_string(index_) <<
@@ -123,9 +133,16 @@ Shard::setStored(std::shared_ptr<Ledger const> const& l)
             " already stored";
         return false;
     }
+    auto const genesisShardIndex {
+        DatabaseShard::seqToShardIndex(detail::genesisSeq)};
+    auto const genesisNumLedgers {
+        DatabaseShard::ledgersPerShard() - (
+            detail::genesisSeq - DatabaseShardImp::firstSeq(
+                DatabaseShardImp::seqToShardIndex(
+                    detail::genesisSeq)))};
     if (boost::icl::length(storedSeqs_) >=
-        (index_ == detail::genesisShardIndex ?
-            detail::genesisNumLedgers : ledgersPerShard) - 1)
+        (index_ == genesisShardIndex ? genesisNumLedgers :
+            DatabaseShard::ledgersPerShard()) - 1)
     {
         if (backend_->fdlimit() != 0)
         {

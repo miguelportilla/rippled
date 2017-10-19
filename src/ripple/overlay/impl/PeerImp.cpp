@@ -32,7 +32,6 @@
 #include <ripple/app/tx/apply.h>
 #include <ripple/basics/random.h>
 #include <ripple/basics/UptimeTimer.h>
-#include <ripple/nodestore/DatabaseShard.h>
 #include <ripple/beast/core/LexicalCast.h>
 #include <ripple/beast/core/SemanticVersion.h>
 #include <ripple/nodestore/DatabaseShard.h>
@@ -368,8 +367,8 @@ PeerImp::hasLedger (uint256 const& hash, std::uint32_t seq) const
     if (std::find(recentLedgers_.begin(),
             recentLedgers_.end(), hash) != recentLedgers_.end())
         return true;
-    return seq != 0 &&
-        boost::icl::contains(shards_, NodeStore::seqToShardIndex(seq));
+    return seq != 0 && boost::icl::contains(
+        shards_, NodeStore::DatabaseShard::seqToShardIndex(seq));
 }
 
 void

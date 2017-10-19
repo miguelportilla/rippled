@@ -222,6 +222,19 @@ SHAMapStoreImp::SHAMapStoreImp (
             Throw<std::runtime_error>("max_size_gb too small");
         if ((maxDiskSpace << 30) < maxDiskSpace)
             Throw<std::runtime_error>("overflow max_size_gb");
+
+        std::uint32_t lps;
+        if (get_if_exists<std::uint32_t>(
+                setup_.shardDatabase, "ledgers_per_shard", lps))
+        {
+            // ledgers_per_shard to be set only in standalone for testing
+            if (! setup_.standalone)
+                Throw<std::runtime_error>(
+                    "ledgers_per_shard only honored in stand alone");
+            if (lps == 0 || lps % 256 != 0)
+                Throw<std::runtime_error>(
+                    "ledgers_per_shard must be a multiple of 256");
+        }
     }
 }
 

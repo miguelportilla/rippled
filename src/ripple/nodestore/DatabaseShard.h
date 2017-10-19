@@ -31,18 +31,6 @@
 namespace ripple {
 namespace NodeStore {
 
-/** Finds a shard index containing the ledger sequence
-
-    @param seq The ledger sequence
-    @return The shard index
-*/
-constexpr
-std::uint32_t
-seqToShardIndex(std::uint32_t const seq)
-{
-    return (seq - 1) / ledgersPerShard;
-}
-
 /** A collection of historical shards
 */
 class DatabaseShard : public Database
@@ -54,12 +42,16 @@ public:
         @param parent The parent Stoppable
         @param scheduler The scheduler to use for performing asynchronous tasks
         @param readThreads The number of async read threads to create
+        @param config The configuration for the database
         @param journal Destination for logging output
     */
     DatabaseShard(std::string const& name, Stoppable& parent,
-        Scheduler& scheduler, int readThreads, beast::Journal journal)
+        Scheduler& scheduler, int readThreads,
+        Section const& config, beast::Journal journal)
         : Database(name, parent, scheduler, readThreads, journal)
-    {}
+    {
+        get_if_exists<std::uint32_t>(config, "ledgers_per_shard", lps_);
+    }
 
     /** Initialize the database
 
@@ -127,6 +119,55 @@ public:
     virtual
     void
     validate() = 0;
+
+    /** @return The number of ledgers stored in a shard
+    */
+    static
+    std::uint32_t
+    ledgersPerShard()
+    {
+        return lps_;
+    }
+
+    /** Calculates the shard index for a given ledger sequence
+
+        @param seq ledger sequence
+        @return The shard index of the ledger sequence
+    */
+    static
+    std::uint32_t
+    seqToShardIndex(std::uint32_t seq)
+    {
+        return (seq - 1) / lps_;
+    }
+
+    /** Calculates the first ledger sequence for a given shard index
+
+        @param shardIndex The shard index considered
+        @return The first ledger sequence pertaining to the shard index
+    */
+    static
+    std::uint32_t
+    firstSeq(std::uint32_t shardIndex)
+    {
+        return 1 + (shardIndex * lps_);
+    }
+
+    /** Calculates the last ledger sequence for a given shard index
+
+        @param shardIndex The shard index considered
+        @return The last ledger sequence pertaining to the shard index
+    */
+    static
+    std::uint32_t
+    lastSeq(std::uint32_t shardIndex)
+    {
+        return (shardIndex + 1) * lps_;
+    }
+
+protected:
+    // The number of ledgers stored in a shard, default is 16384
+    static std::uint32_t lps_;
 };
 
 }

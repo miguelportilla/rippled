@@ -39,7 +39,7 @@
 #include <ripple/basics/TaggedCache.h>
 #include <ripple/basics/UptimeTimer.h>
 #include <ripple/core/TimeKeeper.h>
-#include <ripple/nodestore/impl/Shard.h>
+#include <ripple/nodestore/DatabaseShard.h>
 #include <ripple/overlay/Overlay.h>
 #include <ripple/overlay/Peer.h>
 #include <ripple/protocol/digest.h>
@@ -1598,8 +1598,8 @@ LedgerMaster::fetchForHistory(
             std::uint32_t fetchSz;
             if (reason == InboundLedger::Reason::SHARD)
             {
-                auto firstSeq {NodeStore::detail::firstSeq(
-                     NodeStore::seqToShardIndex(missing))};
+                auto firstSeq {NodeStore::DatabaseShard::firstSeq(
+                    NodeStore::DatabaseShard::seqToShardIndex(missing))};
                 fetchSz = (missing >= firstSeq ? std::min(
                     ledger_fetch_size_, (missing - firstSeq) + 1) : 0);
             }

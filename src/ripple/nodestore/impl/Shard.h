@@ -23,7 +23,6 @@
 #include <ripple/app/ledger/Ledger.h>
 #include <ripple/basics/BasicConfig.h>
 #include <ripple/basics/RangeSet.h>
-#include <ripple/nodestore/DatabaseShard.h>
 #include <ripple/nodestore/NodeObject.h>
 #include <ripple/nodestore/Scheduler.h>
 
@@ -36,28 +35,8 @@ namespace ripple {
 namespace NodeStore {
 namespace detail {
 
-// Return the first ledger sequence of the shard index
-constexpr
-std::uint32_t
-firstSeq(std::uint32_t const shardIndex)
-{
-    return 1 + (shardIndex * ledgersPerShard);
-}
-
-// Return the last ledger sequence of the shard index
-constexpr
-std::uint32_t
-lastSeq(std::uint32_t const shardIndex)
-{
-    return (shardIndex + 1) * ledgersPerShard;
-}
-
-static constexpr auto genesisShardIndex = seqToShardIndex(genesisSeq);
-static constexpr auto genesisNumLedgers = ledgersPerShard -
-    (genesisSeq - firstSeq(genesisShardIndex));
-
-// Average disk space a shard requires (in bytes)
-constexpr std::uint64_t avgShardSize_ = ledgersPerShard * (1024ull * 256);
+// System constant/invariant
+static constexpr std::uint32_t genesisSeq {32570u};
 
 } // detail
 
@@ -65,8 +44,7 @@ constexpr std::uint64_t avgShardSize_ = ledgersPerShard * (1024ull * 256);
    Shards are indexed and store `ledgersPerShard`.
    Shard `i` stores ledgers starting with sequence: `1 + (i * ledgersPerShard)`
    and ending with sequence: `(i + 1) * ledgersPerShard`.
-   Once a shard has all its ledgers, it is marked as read only
-   and is never written to again.
+   Once a shard has all its ledgers, it is never written to again.
 */
 class Shard
 {
