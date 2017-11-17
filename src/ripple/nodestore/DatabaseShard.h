@@ -1,7 +1,7 @@
 //------------------------------------------------------------------------------
 /*
     This file is part of rippled: https://github.com/ripple/rippled
-    Copyright (c) 2012, 2013 Ripple Labs Inc.
+    Copyright (c) 2012, 2017 Ripple Labs Inc.
 
     Permission to use, copy, modify, and/or distribute this software for any
     purpose  with  or without fee is hereby granted, provided that the above
@@ -102,7 +102,7 @@ public:
     */
     virtual
     bool
-    hasLedger(std::uint32_t seq) = 0;
+    contains(std::uint32_t seq) = 0;
 
     /** Query which complete shards are stored
 
@@ -138,6 +138,7 @@ public:
     std::uint32_t
     seqToShardIndex(std::uint32_t seq)
     {
+        assert(seq >= genesisSeq);
         return (seq - 1) / lps_;
     }
 

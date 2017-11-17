@@ -42,12 +42,13 @@ public:
 
     virtual std::mutex& peekMutex() const = 0;
 
-    virtual std::shared_ptr <Backend> const& getWritableBackend() const = 0;
+    virtual
+    std::unique_ptr<Backend> const&
+    getWritableBackend() const = 0;
 
-    virtual std::shared_ptr <Backend> const& getArchiveBackend () const = 0;
-
-    virtual std::shared_ptr <Backend> rotateBackends (
-            std::shared_ptr <Backend> const& newBackend) = 0;
+    virtual
+    std::unique_ptr<Backend>
+    rotateBackends(std::unique_ptr<Backend> newBackend) = 0;
 };
 
 }

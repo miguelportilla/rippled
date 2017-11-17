@@ -448,11 +448,9 @@ SHAMapStoreImp::run()
                     ;
             }
 
-            std::shared_ptr <NodeStore::Backend> newBackend =
-                    makeBackendRotating();
+            auto newBackend = makeBackendRotating();
             JLOG(journal_.debug()) << validatedSeq << " new backend "
                     << newBackend->getName();
-            std::shared_ptr <NodeStore::Backend> oldBackend;
 
             clearCaches (validatedSeq);
             switch (health())
@@ -470,13 +468,15 @@ SHAMapStoreImp::run()
             std::string nextArchiveDir =
                 dbRotating_->getWritableBackend()->getName();
             lastRotated = validatedSeq;
+            std::unique_ptr<NodeStore::Backend> oldBackend;
             {
                 std::lock_guard <std::mutex> lock (dbRotating_->peekMutex());
 
                 state_db_.setState (SavedState {newBackend->getName(),
                         nextArchiveDir, lastRotated});
                 clearCaches (validatedSeq);
-                oldBackend = dbRotating_->rotateBackends (newBackend);
+                oldBackend = std::move(
+                    dbRotating_->rotateBackends(std::move(newBackend)));
             }
             JLOG(journal_.debug()) << "finished rotation " << validatedSeq;
 
@@ -547,7 +547,7 @@ SHAMapStoreImp::dbPaths()
     }
 }
 
-std::shared_ptr <NodeStore::Backend>
+std::unique_ptr <NodeStore::Backend>
 SHAMapStoreImp::makeBackendRotating (std::string path)
 {
     boost::filesystem::path newPath;
@@ -566,8 +566,10 @@ SHAMapStoreImp::makeBackendRotating (std::string path)
     }
     parameters.set("path", newPath.string());
 
-    return NodeStore::Manager::instance().make_Backend (parameters, scheduler_,
-            nodeStoreJournal_);
+    auto backend {NodeStore::Manager::instance().make_Backend(
+        parameters, scheduler_, nodeStoreJournal_)};
+    backend->open();
+    return backend;
 }
 
 bool

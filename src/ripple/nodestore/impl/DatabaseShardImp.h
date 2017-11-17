@@ -1,7 +1,7 @@
 //------------------------------------------------------------------------------
 /*
     This file is part of rippled: https://github.com/ripple/rippled
-    Copyright (c) 2012, 2013 Ripple Labs Inc.
+    Copyright (c) 2012, 2017 Ripple Labs Inc.
 
     Permission to use, copy, modify, and/or distribute this software for any
     purpose  with  or without fee is hereby granted, provided that the above
@@ -52,7 +52,7 @@ public:
     setStored(std::shared_ptr<Ledger const> const& ledger) override;
 
     bool
-    hasLedger(std::uint32_t seq) override;
+    contains(std::uint32_t seq) override;
 
     std::string
     getCompleteShards() override;
@@ -64,12 +64,6 @@ public:
     getName() const override
     {
         return "shardstore";
-    }
-
-    void
-    for_each(std::function <void(std::shared_ptr<NodeObject>)> f) override
-    {
-        Throw<std::runtime_error>("Shard store import not supported");
     }
 
     void
@@ -110,6 +104,7 @@ public:
 private:
     Application& app_;
     mutable std::mutex m_;
+    bool init_ {false};
     std::map<std::uint32_t, std::unique_ptr<Shard>> complete_;
     std::unique_ptr<Shard> incomplete_;
     Section const config_;
@@ -135,10 +130,17 @@ private:
 
     // Shard cache tuning
     int cacheSz_ {shardCacheSz};
-    int cacheAge_ {shardCacheSeconds};
+    TaggedCache<uint256, NodeObject>::clock_type::rep cacheAge_ {
+        shardCacheSeconds};
 
     std::shared_ptr<NodeObject>
     fetchFrom(uint256 const& hash, std::uint32_t seq) override;
+
+    void
+    for_each(std::function <void(std::shared_ptr<NodeObject>)> f) override
+    {
+        Throw<std::runtime_error>("Shard store import not supported");
+    }
 
     // Finds a random shard index that is not stored
     boost::optional<std::uint32_t>

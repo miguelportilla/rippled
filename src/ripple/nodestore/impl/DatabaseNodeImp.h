@@ -20,13 +20,13 @@
 #ifndef RIPPLE_NODESTORE_DATABASENODEIMP_H_INCLUDED
 #define RIPPLE_NODESTORE_DATABASENODEIMP_H_INCLUDED
 
-#include <ripple/nodestore/DatabaseNode.h>
+#include <ripple/nodestore/Database.h>
 #include <ripple/basics/chrono.h>
 
 namespace ripple {
 namespace NodeStore {
 
-class DatabaseNodeImp : public DatabaseNode
+class DatabaseNodeImp : public Database
 {
 public:
     DatabaseNodeImp() = delete;
@@ -36,7 +36,7 @@ public:
     DatabaseNodeImp(std::string const& name,
         Scheduler& scheduler, int readThreads, Stoppable& parent,
             std::unique_ptr<Backend> backend, beast::Journal j)
-        : DatabaseNode(name, parent, scheduler, readThreads, j)
+        : Database(name, parent, scheduler, readThreads, j)
         , pCache_(name, cacheTargetSize, cacheTargetSeconds, stopwatch(), j)
         , nCache_(name, stopwatch(), cacheTargetSize, cacheTargetSeconds)
         , backend_(std::move(backend))
@@ -60,12 +60,6 @@ public:
     getWriteLoad() const override
     {
         return backend_->getWriteLoad();
-    }
-
-    void
-    for_each(std::function<void(std::shared_ptr<NodeObject>)> f) override
-    {
-        backend_->for_each(f);
     }
 
     void
@@ -123,6 +117,12 @@ private:
     fetchFrom(uint256 const& hash, std::uint32_t seq) override
     {
         return fetchInternal(hash, *backend_);
+    }
+
+    void
+    for_each(std::function<void(std::shared_ptr<NodeObject>)> f) override
+    {
+        backend_->for_each(f);
     }
 };
 

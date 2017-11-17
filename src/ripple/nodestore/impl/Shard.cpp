@@ -1,7 +1,7 @@
 //------------------------------------------------------------------------------
 /*
     This file is part of rippled: https://github.com/ripple/rippled
-    Copyright (c) 2012, 2013 Ripple Labs Inc.
+    Copyright (c) 2012, 2017 Ripple Labs Inc.
 
     Permission to use, copy, modify, and/or distribute this software for any
     purpose  with  or without fee is hereby granted, provided that the above
@@ -27,9 +27,10 @@ namespace ripple {
 namespace NodeStore {
 
 Shard::Shard(std::uint32_t index, int cacheSz,
-    int cacheAge, beast::Journal& j)
+    TaggedCache<uint256, NodeObject>::clock_type::rep cacheAge,
+    beast::Journal& j)
     : index_(index)
-    , firstSeq_(std::max(detail::genesisSeq,
+    , firstSeq_(std::max(genesisSeq,
         DatabaseShard::firstSeq(index)))
     , lastSeq_(DatabaseShard::lastSeq(index))
     , pCache_("shard " + std::to_string(index_),
@@ -38,7 +39,7 @@ Shard::Shard(std::uint32_t index, int cacheSz,
         stopwatch(), cacheSz, cacheAge)
     , j_(j)
 {
-    assert(index_ >= DatabaseShard::seqToShardIndex(detail::genesisSeq));
+    assert(index_ >= DatabaseShard::seqToShardIndex(genesisSeq));
 }
 
 bool
@@ -54,6 +55,7 @@ Shard::open(Section config, Scheduler& scheduler,
     {
         backend_ = Manager::instance().make_Backend(
             config, scheduler, j_);
+        backend_->open();
     }
     catch (std::exception const& e)
     {
@@ -96,12 +98,12 @@ Shard::open(Section config, Scheduler& scheduler,
             }
 
             auto const genesisShardIndex {
-                DatabaseShard::seqToShardIndex(detail::genesisSeq)};
+                DatabaseShard::seqToShardIndex(genesisSeq)};
             auto const genesisNumLedgers {
                 DatabaseShard::ledgersPerShard() - (
-                    detail::genesisSeq - DatabaseShardImp::firstSeq(
+                    genesisSeq - DatabaseShardImp::firstSeq(
                         DatabaseShardImp::seqToShardIndex(
-                            detail::genesisSeq)))};
+                            genesisSeq)))};
             if (boost::icl::length(storedSeqs_) ==
                 (index_ == genesisShardIndex ? genesisNumLedgers :
                     DatabaseShard::ledgersPerShard()))
@@ -134,12 +136,12 @@ Shard::setStored(std::shared_ptr<Ledger const> const& l)
         return false;
     }
     auto const genesisShardIndex {
-        DatabaseShard::seqToShardIndex(detail::genesisSeq)};
+        DatabaseShard::seqToShardIndex(genesisSeq)};
     auto const genesisNumLedgers {
         DatabaseShard::ledgersPerShard() - (
-            detail::genesisSeq - DatabaseShardImp::firstSeq(
+            genesisSeq - DatabaseShardImp::firstSeq(
                 DatabaseShardImp::seqToShardIndex(
-                    detail::genesisSeq)))};
+                    genesisSeq)))};
     if (boost::icl::length(storedSeqs_) >=
         (index_ == genesisShardIndex ? genesisNumLedgers :
             DatabaseShard::ledgersPerShard()) - 1)
@@ -180,7 +182,7 @@ Shard::prepare()
 }
 
 bool
-Shard::hasLedger(std::uint32_t seq) const
+Shard::contains(std::uint32_t seq) const
 {
     if (seq < firstSeq_ || seq > lastSeq_)
         return false;

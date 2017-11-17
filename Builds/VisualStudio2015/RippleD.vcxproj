@@ -2253,8 +2253,6 @@
     </ClCompile>
     <ClInclude Include="..\..\src\ripple\nodestore\Database.h">
     </ClInclude>
-    <ClInclude Include="..\..\src\ripple\nodestore\DatabaseNode.h">
-    </ClInclude>
     <ClInclude Include="..\..\src\ripple\nodestore\DatabaseRotating.h">
     </ClInclude>
     <ClInclude Include="..\..\src\ripple\nodestore\DatabaseShard.h">

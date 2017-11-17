@@ -1,7 +1,7 @@
 //------------------------------------------------------------------------------
 /*
     This file is part of rippled: https://github.com/ripple/rippled
-    Copyright (c) 2012, 2013 Ripple Labs Inc.
+    Copyright (c) 2012, 2017 Ripple Labs Inc.
 
     Permission to use, copy, modify, and/or distribute this software for any
     purpose  with  or without fee is hereby granted, provided that the above
@@ -80,17 +80,6 @@ public:
     std::string
     getName() const = 0;
 
-    /** Visit every object in the database
-        This is usually called during import.
-
-        @note This routine will not be called concurrently with itself
-                or other methods.
-        @see import
-    */
-    virtual
-    void
-    for_each(std::function <void(std::shared_ptr<NodeObject>)> f) = 0;
-
     /** Import objects from another database. */
     virtual
     void
@@ -108,7 +97,6 @@ public:
         The caller's Blob parameter is overwritten.
 
         @param type The type of object.
-        @param ledgerIndex The ledger in which the object appears.
         @param data The payload of the object. The caller's
                     variable is overwritten.
         @param hash The 256-bit hash of the payload data.
@@ -168,8 +156,9 @@ public:
 
     /** Get the maximum number of async reads the node store prefers.
 
-        @param seq The sequence of the ledger the object belongs to.
+        @param seq A ledger sequence specifying a shard to query.
         @return The number of async reads preferred.
+        @note The sequence is only used with the shard store.
     */
     virtual
     int
@@ -272,6 +261,17 @@ private:
     virtual
     std::shared_ptr<NodeObject>
     fetchFrom(uint256 const& hash, std::uint32_t seq) = 0;
+
+    /** Visit every object in the database
+        This is usually called during import.
+
+        @note This routine will not be called concurrently with itself
+                or other methods.
+        @see import
+    */
+    virtual
+    void
+    for_each(std::function <void(std::shared_ptr<NodeObject>)> f) = 0;
 
     void
     threadEntry();

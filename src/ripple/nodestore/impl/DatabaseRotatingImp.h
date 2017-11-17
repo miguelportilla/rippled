@@ -34,8 +34,8 @@ public:
 
     DatabaseRotatingImp(std::string const& name,
         Scheduler& scheduler, int readThreads, Stoppable& parent,
-            std::shared_ptr <Backend> writableBackend,
-                 std::shared_ptr <Backend> archiveBackend,
+            std::unique_ptr<Backend> writableBackend,
+                 std::unique_ptr<Backend> archiveBackend,
                     beast::Journal j);
 
     ~DatabaseRotatingImp() override
@@ -44,20 +44,15 @@ public:
         stopThreads();
     }
 
-    std::shared_ptr <Backend> const& getWritableBackend() const override
+    std::unique_ptr<Backend> const&
+    getWritableBackend() const override
     {
         std::lock_guard <std::mutex> lock (rotateMutex_);
         return writableBackend_;
     }
 
-    std::shared_ptr <Backend> const& getArchiveBackend() const override
-    {
-        std::lock_guard <std::mutex> lock (rotateMutex_);
-        return archiveBackend_;
-    }
-
-    std::shared_ptr <Backend> rotateBackends (
-            std::shared_ptr <Backend> const& newBackend) override;
+    std::unique_ptr<Backend>
+    rotateBackends(std::unique_ptr<Backend> newBackend) override;
 
     std::mutex& peekMutex() const override
     {
@@ -72,13 +67,6 @@ public:
     std::int32_t getWriteLoad() const override
     {
         return getWritableBackend()->getWriteLoad();
-    }
-
-    void for_each (std::function <void(std::shared_ptr<NodeObject>)> f) override
-    {
-        Backends b = getBackends();
-        b.archiveBackend->for_each (f);
-        b.writableBackend->for_each (f);
     }
 
     void import (Database& source) override
@@ -130,13 +118,13 @@ private:
     // Negative cache
     KeyCache<uint256> nCache_;
 
-    std::shared_ptr <Backend> writableBackend_;
-    std::shared_ptr <Backend> archiveBackend_;
+    std::unique_ptr <Backend> writableBackend_;
+    std::unique_ptr <Backend> archiveBackend_;
     mutable std::mutex rotateMutex_;
 
     struct Backends {
-        std::shared_ptr <Backend> const& writableBackend;
-        std::shared_ptr <Backend> const& archiveBackend;
+        std::unique_ptr<Backend> const& writableBackend;
+        std::unique_ptr<Backend> const& archiveBackend;
     };
 
     Backends getBackends() const
@@ -147,6 +135,14 @@ private:
 
     std::shared_ptr<NodeObject> fetchFrom(
         uint256 const& hash, std::uint32_t seq) override;
+
+    void
+    for_each(std::function <void(std::shared_ptr<NodeObject>)> f) override
+    {
+        Backends b = getBackends();
+        b.archiveBackend->for_each(f);
+        b.writableBackend->for_each(f);
+    }
 };
 
 }

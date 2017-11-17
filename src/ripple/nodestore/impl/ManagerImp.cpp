@@ -54,30 +54,16 @@ ManagerImp::make_Backend (
     Scheduler& scheduler,
     beast::Journal journal)
 {
-    std::unique_ptr <Backend> backend;
+    std::string const type {get<std::string>(parameters, "type")};
+    if (type.empty())
+        missing_backend();
 
-    std::string const type (get<std::string>(parameters, "type"));
+    auto factory {find(type)};
+    if(!factory)
+        missing_backend();
 
-    if (! type.empty ())
-    {
-        Factory* const factory (find (type));
-
-        if (factory != nullptr)
-        {
-            backend = factory->createInstance (
-                NodeObject::keyBytes, parameters, scheduler, journal);
-        }
-        else
-        {
-            missing_backend ();
-        }
-    }
-    else
-    {
-        missing_backend ();
-    }
-
-    return backend;
+    return factory->createInstance(
+        NodeObject::keyBytes, parameters, scheduler, journal);
 }
 
 std::unique_ptr <Database>
@@ -89,15 +75,15 @@ ManagerImp::make_Database (
     Section const& backendParameters,
     beast::Journal journal)
 {
+    auto backend {make_Backend(
+        backendParameters, scheduler, journal)};
+    backend->open();
     return std::make_unique <DatabaseNodeImp> (
         name,
         scheduler,
         readThreads,
         parent,
-        make_Backend (
-            backendParameters,
-            scheduler,
-            journal),
+        std::move(backend),
         journal);
 }
 

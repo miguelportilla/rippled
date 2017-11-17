@@ -243,11 +243,6 @@ public:
 
     std::size_t getFetchPackCacheSize () const;
 
-    void fetchForHistory(
-        std::uint32_t missing,
-        bool& progress,
-        InboundLedger::Reason reason);
-
 private:
     using ScopedLockType = std::lock_guard <std::recursive_mutex>;
     using ScopedUnlockType = GenericScopedUnlock <std::recursive_mutex>;
@@ -269,10 +264,13 @@ private:
 
     std::size_t getNeededValidations();
     void advanceThread();
+    void fetchForHistory(
+        std::uint32_t missing,
+        bool& progress,
+        InboundLedger::Reason reason);
     // Try to publish ledgers, acquire missing ledgers.  Always called with
     // m_mutex locked.  The passed ScopedLockType is a reminder to callers.
     void doAdvance(ScopedLockType&);
-    bool shouldFetchPack(std::uint32_t seq) const;
     bool shouldAcquire(
         std::uint32_t const currentLedger,
         std::uint32_t const ledgerHistory,

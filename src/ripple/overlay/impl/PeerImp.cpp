@@ -1708,7 +1708,7 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMGetObjectByHash> const& m)
                 //             need to inject the NodeStore interfaces.
                 std::uint32_t seq {obj.has_ledgerseq() ? obj.ledgerseq() : 0};
                 auto hObj {app_.getNodeStore ().fetch (hash, seq)};
-                if (!hObj)
+                if (!hObj && seq >= NodeStore::genesisSeq)
                 {
                     if (auto shardStore = app_.getShardStore())
                         hObj = shardStore->fetch(hash, seq);
@@ -2158,8 +2158,11 @@ PeerImp::getLedger (std::shared_ptr<protocol::TMGetLedger> const& m)
                 if (packet.has_ledgerseq())
                 {
                     seq = packet.ledgerseq();
-                    if (auto shardStore = app_.getShardStore())
-                        ledger = shardStore->fetchLedger(ledgerhash, seq);
+                    if (seq >= NodeStore::genesisSeq)
+                    {
+                        if (auto shardStore = app_.getShardStore())
+                            ledger = shardStore->fetchLedger(ledgerhash, seq);
+                    }
                 }
                 if (! ledger)
                 {

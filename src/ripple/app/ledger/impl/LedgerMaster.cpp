@@ -946,12 +946,6 @@ LedgerMaster::getLedgerHashForHistory(
     return ret;
 }
 
-bool
-LedgerMaster::shouldFetchPack (std::uint32_t seq) const
-{
-    return (fetch_seq_ != seq);
-}
-
 std::vector<std::shared_ptr<Ledger const>>
 LedgerMaster::findNewLedgersToPublish ()
 {
@@ -1539,7 +1533,9 @@ LedgerMaster::fetchForHistory(
             {
                 ledger = app_.getInboundLedgers().acquire(
                     *hash, missing, reason);
-                if (!ledger && (missing > 32600) && missing != fetch_seq_)
+                if (!ledger &&
+                    missing > NodeStore::genesisSeq &&
+                    missing != fetch_seq_)
                 {
                     JLOG(m_journal.trace())
                         << "fetchForHistory want fetch pack " << missing;
@@ -1597,14 +1593,16 @@ LedgerMaster::fetchForHistory(
         {
             std::uint32_t fetchSz;
             if (reason == InboundLedger::Reason::SHARD)
-            {
-                auto firstSeq {NodeStore::DatabaseShard::firstSeq(
-                    NodeStore::DatabaseShard::seqToShardIndex(missing))};
-                fetchSz = (missing >= firstSeq ? std::min(
-                    ledger_fetch_size_, (missing - firstSeq) + 1) : 0);
-            }
+                // Do not fetch ledger sequences lower
+                // than the shard's first ledger sequence
+                fetchSz = NodeStore::DatabaseShard::firstSeq(
+                    NodeStore::DatabaseShard::seqToShardIndex(missing));
             else
-                fetchSz = ledger_fetch_size_;
+                // Do not fetch ledger sequences lower
+                // than the genesis ledger sequence
+                fetchSz = NodeStore::genesisSeq;
+            fetchSz = missing >= fetchSz ?
+                std::min(ledger_fetch_size_, (missing - fetchSz) + 1) : 0;
             try
             {
                 for (std::uint32_t i = 0; i < fetchSz; ++i)
@@ -1660,7 +1658,7 @@ void LedgerMaster::doAdvance (ScopedLockType& sl)
                 {
                     ScopedLockType sl(mCompleteLock);
                     missing = prevMissing(mCompleteLedgers,
-                        mPubLedger->info().seq, std::uint32_t(32600));
+                        mPubLedger->info().seq, NodeStore::genesisSeq);
                 }
                 if (missing)
                 {

@@ -1,7 +1,7 @@
 //------------------------------------------------------------------------------
 /*
     This file is part of rippled: https://github.com/ripple/rippled
-    Copyright (c) 2012, 2013 Ripple Labs Inc.
+    Copyright (c) 2012, 2017 Ripple Labs Inc.
 
     Permission to use, copy, modify, and/or distribute this software for any
     purpose  with  or without fee is hereby granted, provided that the above
@@ -46,47 +46,45 @@ DatabaseShardImp::DatabaseShardImp(Application& app,
 
 DatabaseShardImp::~DatabaseShardImp()
 {
+    // Stop threads before data members are destroyed
     stopThreads();
 }
 
 bool
 DatabaseShardImp::init()
 {
-    using namespace boost::filesystem;
+    std::lock_guard<std::mutex> l(m_);
+    if (init_)
     {
-        // Validate backend
-        Factory* f;
-        {
-            std::string const type(get<std::string>(config_, "type"));
-            if (type.empty() || !(f = Manager::instance().find(type)))
-            {
-                JLOG(j_.error()) <<
-                    "Invalid shard store type specified";
-                return false;
-            }
-        }
-
-        std::string tmpDir;
-        auto i = 0;
-        do
-            tmpDir = "TMP" + std::to_string(i++);
-        while (is_directory(dir_ / tmpDir));
-
-        auto d = dir_ / tmpDir;
-        auto config {config_};
-        config.set("path", d.string());
-        {
-            fdLimit_ = f->createInstance(NodeObject::keyBytes,
-                config, scheduler_, j_)->fdlimit();
-            backed_ = static_cast<bool>(fdLimit_);
-        }
-        remove_all(d);
+        JLOG(j_.error()) <<
+            "Already initialized";
+        return false;
     }
+
+    using namespace boost::filesystem;
+    // Find backend type and file handle requirement
+    try
+    {
+        fdLimit_ = Manager::instance().make_Backend(
+            config_, scheduler_, j_)->fdlimit();
+    }
+    catch (std::exception const&)
+    {
+        JLOG(j_.error()) <<
+            "Invalid or missing shard store "
+            "type specified in [shard_db]";
+        return false;
+    }
+
+    backed_ = static_cast<bool>(fdLimit_);
     if (!backed_)
+    {
+        init_ = true;
         return true;
+    }
 
     auto const genesisShardIndex {
-        seqToShardIndex(detail::genesisSeq)};
+        seqToShardIndex(genesisSeq)};
     // Find shards
     for (auto const& d : directory_iterator(dir_))
     {
@@ -128,6 +126,7 @@ DatabaseShardImp::init()
     }
     else
         updateStats();
+    init_ = true;
     return true;
 }
 
@@ -135,6 +134,7 @@ boost::optional<std::uint32_t>
 DatabaseShardImp::prepare(std::uint32_t validLedgerSeq)
 {
     std::lock_guard<std::mutex> l(m_);
+    assert(init_);
     if (incomplete_)
         return incomplete_->prepare();
     if (!canAdd_)
@@ -184,7 +184,7 @@ DatabaseShardImp::prepare(std::uint32_t validLedgerSeq)
 std::shared_ptr<Ledger>
 DatabaseShardImp::fetchLedger(uint256 const& hash, std::uint32_t seq)
 {
-    if (!hasLedger(seq))
+    if (!contains(seq))
         return {};
     auto nObj = fetch(hash, seq);
     if (!nObj)
@@ -241,6 +241,7 @@ DatabaseShardImp::setStored(std::shared_ptr<Ledger const> const& ledger)
     }
     auto const shardIndex {seqToShardIndex(ledger->info().seq)};
     std::lock_guard<std::mutex> l(m_);
+    assert(init_);
     if (!incomplete_ || shardIndex != incomplete_->index())
     {
         JLOG(j_.warn()) <<
@@ -267,14 +268,15 @@ DatabaseShardImp::setStored(std::shared_ptr<Ledger const> const& ledger)
 }
 
 bool
-DatabaseShardImp::hasLedger(std::uint32_t seq)
+DatabaseShardImp::contains(std::uint32_t seq)
 {
     auto const shardIndex {seqToShardIndex(seq)};
     std::lock_guard<std::mutex> l(m_);
+    assert(init_);
     if (complete_.find(shardIndex) != complete_.end())
         return true;
     if (incomplete_ && incomplete_->index() == shardIndex)
-        return incomplete_->hasLedger(seq);
+        return incomplete_->contains(seq);
     return false;
 }
 
@@ -282,27 +284,32 @@ std::string
 DatabaseShardImp::getCompleteShards()
 {
     std::lock_guard<std::mutex> l(m_);
+    assert(init_);
     return status_;
 }
 
 void
 DatabaseShardImp::validate()
 {
-    if (complete_.empty() && !incomplete_)
     {
-        JLOG(j_.fatal()) <<
-            "No shards to validate";
-        return;
-    }
+        std::lock_guard<std::mutex> l(m_);
+        assert(init_);
+        if (complete_.empty() && !incomplete_)
+        {
+            JLOG(j_.fatal()) <<
+                "No shards to validate";
+            return;
+        }
 
-    std::string s {"Found shards "};
-    for (auto& e : complete_)
-        s += std::to_string(e.second->index()) + ",";
-    if (incomplete_)
-        s += std::to_string(incomplete_->index());
-    else
-        s.pop_back();
-    JLOG(j_.fatal()) << s;
+        std::string s {"Found shards "};
+        for (auto& e : complete_)
+            s += std::to_string(e.second->index()) + ",";
+        if (incomplete_)
+            s += std::to_string(incomplete_->index());
+        else
+            s.pop_back();
+        JLOG(j_.fatal()) << s;
+    }
 
     for (auto& e : complete_)
     {
@@ -323,6 +330,7 @@ DatabaseShardImp::getWriteLoad() const
     std::int32_t wl {0};
     {
         std::lock_guard<std::mutex> l(m_);
+        assert(init_);
         for (auto const& c : complete_)
             wl += c.second->getBackend().getWriteLoad();
         if (incomplete_)
@@ -342,6 +350,7 @@ DatabaseShardImp::store(NodeObjectType type,
     auto const shardIndex {seqToShardIndex(seq)};
     {
         std::lock_guard<std::mutex> l(m_);
+        assert(init_);
         if (!incomplete_ || shardIndex != incomplete_->index())
         {
             JLOG(j_.warn()) <<
@@ -366,6 +375,7 @@ DatabaseShardImp::fetch(uint256 const& hash, std::uint32_t seq)
     auto const shardIndex {seqToShardIndex(seq)};
     {
         std::lock_guard<std::mutex> l(m_);
+        assert(init_);
         auto it = complete_.find(shardIndex);
         if (it != complete_.end())
         {
@@ -392,6 +402,7 @@ DatabaseShardImp::asyncFetch(uint256 const& hash,
     auto const shardIndex {seqToShardIndex(seq)};
     {
         std::lock_guard<std::mutex> l(m_);
+        assert(init_);
         auto it = complete_.find(shardIndex);
         if (it != complete_.end())
         {
@@ -439,6 +450,7 @@ DatabaseShardImp::copyLedger(std::shared_ptr<Ledger const> const& ledger)
     }
     auto const shardIndex {seqToShardIndex(ledger->info().seq)};
     std::lock_guard<std::mutex> l(m_);
+    assert(init_);
     if (!incomplete_ || shardIndex != incomplete_->index())
     {
         JLOG(j_.warn()) <<
@@ -544,6 +556,7 @@ DatabaseShardImp::getDesiredAsyncReadCount(std::uint32_t seq)
     auto const shardIndex {seqToShardIndex(seq)};
     {
         std::lock_guard<std::mutex> l(m_);
+        assert(init_);
         auto it = complete_.find(shardIndex);
         if (it != complete_.end())
             return it->second->pCache().getTargetSize() / asyncDivider;
@@ -559,6 +572,7 @@ DatabaseShardImp::getCacheHitRate()
     float sz, f {0};
     {
         std::lock_guard<std::mutex> l(m_);
+        assert(init_);
         sz = complete_.size();
         for (auto const& c : complete_)
             f += c.second->pCache().getHitRate();
@@ -575,6 +589,7 @@ void
 DatabaseShardImp::tune(int size, int age)
 {
     std::lock_guard<std::mutex> l(m_);
+    assert(init_);
     cacheSz_ = size;
     cacheAge_ = age;
     int const sz {calcTargetCacheSz()};
@@ -598,6 +613,7 @@ void
 DatabaseShardImp::sweep()
 {
     std::lock_guard<std::mutex> l(m_);
+    assert(init_);
     int const sz {calcTargetCacheSz()};
     for (auto const& c : complete_)
     {
@@ -622,6 +638,7 @@ DatabaseShardImp::fetchFrom(uint256 const& hash, std::uint32_t seq)
     auto const shardIndex {seqToShardIndex(seq)};
     {
         std::unique_lock<std::mutex> l(m_);
+        assert(init_);
         auto it = complete_.find(shardIndex);
         if (it != complete_.end())
             backend = &it->second->getBackend();
@@ -654,7 +671,7 @@ DatabaseShardImp::findShardIndexToAdd(std::uint32_t validLedgerSeq)
         // Find the available indexes and select one at random
         std::vector<std::uint32_t> available;
         available.reserve(maxShardIndex - numShards + 1);
-        for (std::uint32_t i = seqToShardIndex(detail::genesisSeq);
+        for (std::uint32_t i = seqToShardIndex(genesisSeq);
             i <= maxShardIndex; ++i)
         {
             if (complete_.find(i) == complete_.end() &&
@@ -670,7 +687,7 @@ DatabaseShardImp::findShardIndexToAdd(std::uint32_t validLedgerSeq)
     // Keep choosing indexes at random until an available one is found
     // chances of running more than 30 times is less than 1 in a billion
     auto const genesisShardIndex {
-        seqToShardIndex(detail::genesisSeq)};
+        seqToShardIndex(genesisSeq)};
     for (int i = 0; i < 40; ++i)
     {
         auto const r = rand_int(genesisShardIndex, maxShardIndex);

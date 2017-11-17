@@ -111,7 +111,7 @@ InboundLedger::init(ScopedLockType& collectionLock)
             if (mFailed)
                 return;
         }
-        else if (shardStore)
+        else if (shardStore && mSeq >= NodeStore::genesisSeq)
         {
             if (auto l = shardStore->fetchLedger(mHash, mSeq))
             {
@@ -280,6 +280,26 @@ InboundLedger::tryDB(Family& f)
 {
     if (! mHaveHeader)
     {
+        auto makeLedger = [&, this](Blob const& data)
+            {
+                JLOG(m_journal.trace()) <<
+                    "Ledger header found in fetch pack";
+                mLedger = std::make_shared<Ledger>(
+                    deserializeHeader(makeSlice(data), true),
+                        app_.config(), f);
+                if (mLedger->info().hash != mHash ||
+                    (mSeq != 0 && mSeq != mLedger->info().seq))
+                {
+                    // We know for a fact the ledger can never be acquired
+                    JLOG(m_journal.warn()) <<
+                        "hash " << mHash <<
+                        " seq " << std::to_string(mSeq) <<
+                        " cannot be a ledger";
+                    mLedger.reset();
+                    mFailed = true;
+                }
+            };
+
         // Try to fetch the ledger header from the DB
         auto node = f.db().fetch(mHash, mSeq);
         if (! node)
@@ -287,45 +307,21 @@ InboundLedger::tryDB(Family& f)
             auto data = app_.getLedgerMaster().getFetchPack(mHash);
             if (! data)
                 return;
-
             JLOG (m_journal.trace()) <<
                 "Ledger header found in fetch pack";
-            mLedger = std::make_shared<Ledger>(
-                deserializeHeader(makeSlice(*data), true),
-                    app_.config(), f);
-            if (mLedger->info().hash != mHash ||
-                (mSeq != 0 && mSeq != mLedger->info().seq))
-            {
-                // We know for a fact the ledger can never be acquired
-                JLOG(m_journal.warn()) <<
-                    "hash " << mHash <<
-                    " seq " << std::to_string(mSeq) <<
-                    " cannot be a ledger";
-                mFailed = true;
-                return;
-            }
-            f.db().store(hotLEDGER, std::move(*data),
-                mHash, mLedger->info().seq);
+            makeLedger(*data);
+            if (mLedger)
+                f.db().store(hotLEDGER, std::move(*data),
+                    mHash, mLedger->info().seq);
         }
         else
         {
             JLOG (m_journal.trace()) <<
                 "Ledger header found in node store";
-            mLedger = std::make_shared<Ledger>(
-                deserializeHeader(makeSlice(node->getData()), true),
-                    app_.config(), f);
-            if (mLedger->info().hash != mHash ||
-                (mSeq != 0 && mSeq != mLedger->info().seq))
-            {
-                // We know for a fact the ledger can never be acquired
-                JLOG(m_journal.warn()) <<
-                    "hash " << mHash <<
-                    " seq " << std::to_string(mSeq) <<
-                    " cannot be a ledger";
-                mFailed = true;
-                return;
-            }
+            makeLedger(node->getData());
         }
+        if (mFailed)
+            return;
         if (mSeq == 0)
             mSeq = mLedger->info().seq;
         mLedger->stateMap().setLedgerSeq(mSeq);

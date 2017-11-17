@@ -61,7 +61,7 @@ Database::onStop()
 {
     // After stop time we can no longer use the JobQueue for background
     // reads.  Join the background read threads.
-    Database::stopThreads();
+    stopThreads();
     stopped();
 }
 

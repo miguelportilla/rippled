@@ -1,7 +1,7 @@
 //------------------------------------------------------------------------------
 /*
     This file is part of rippled: https://github.com/ripple/rippled
-    Copyright (c) 2012, 2013 Ripple Labs Inc.
+    Copyright (c) 2012, 2017 Ripple Labs Inc.
 
     Permission to use, copy, modify, and/or distribute this software for any
     purpose  with  or without fee is hereby granted, provided that the above
@@ -33,12 +33,6 @@
 
 namespace ripple {
 namespace NodeStore {
-namespace detail {
-
-// System constant/invariant
-static constexpr std::uint32_t genesisSeq {32570u};
-
-} // detail
 
 /* A range of historical ledgers backed by a nodestore.
    Shards are indexed and store `ledgersPerShard`.
@@ -50,7 +44,8 @@ class Shard
 {
 public:
     Shard(std::uint32_t index, int cacheSz,
-        int cacheAge, beast::Journal& j);
+        TaggedCache<uint256, NodeObject>::clock_type::rep cacheAge,
+        beast::Journal& j);
 
     bool
     open(Section config, Scheduler& scheduler,
@@ -63,7 +58,7 @@ public:
     prepare();
 
     bool
-    hasLedger(std::uint32_t seq) const;
+    contains(std::uint32_t seq) const;
 
     void
     validate(Application& app);
@@ -99,9 +94,6 @@ public:
 
     std::shared_ptr<Ledger const>
     lastStored() {return lastStored_;}
-
-    std::uint32_t
-    numComplete() const {return boost::icl::length(storedSeqs_);}
 
 private:
     friend class boost::serialization::access;

@@ -179,8 +179,9 @@ private:
     bool copyNode (std::uint64_t& nodeCount, SHAMapAbstractNode const &node);
     void run();
     void dbPaths();
-    std::shared_ptr <NodeStore::Backend> makeBackendRotating (
-            std::string path = std::string());
+
+    std::unique_ptr<NodeStore::Backend>
+    makeBackendRotating (std::string path = std::string());
 
     template <class CacheInstance>
     bool

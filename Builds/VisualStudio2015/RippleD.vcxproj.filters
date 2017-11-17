@@ -2877,9 +2877,6 @@
     <ClInclude Include="..\..\src\ripple\nodestore\Database.h">
       <Filter>ripple\nodestore</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\src\ripple\nodestore\DatabaseNode.h">
-      <Filter>ripple\nodestore</Filter>
-    </ClInclude>
     <ClInclude Include="..\..\src\ripple\nodestore\DatabaseRotating.h">
       <Filter>ripple\nodestore</Filter>
     </ClInclude>

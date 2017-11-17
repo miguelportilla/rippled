@@ -27,29 +27,28 @@ namespace NodeStore {
 
 DatabaseRotatingImp::DatabaseRotatingImp(
     std::string const& name, Scheduler& scheduler, int readThreads,
-        Stoppable& parent, std::shared_ptr <Backend> writableBackend,
-            std::shared_ptr <Backend> archiveBackend, beast::Journal j)
+        Stoppable& parent, std::unique_ptr<Backend> writableBackend,
+            std::unique_ptr<Backend> archiveBackend, beast::Journal j)
     : DatabaseRotating(name, parent, scheduler, readThreads, j)
     , pCache_(name, cacheTargetSize, cacheTargetSeconds, stopwatch(), j)
     , nCache_(name, stopwatch(), cacheTargetSize, cacheTargetSeconds)
-    , writableBackend_(writableBackend)
-    , archiveBackend_(archiveBackend)
+    , writableBackend_(std::move(writableBackend))
+    , archiveBackend_(std::move(archiveBackend))
 {
-    if (writableBackend)
+    if (writableBackend_)
         fdLimit_ += writableBackend_->fdlimit();
     if (archiveBackend_)
         fdLimit_ += archiveBackend_->fdlimit();
 }
 
 // Make sure to call it already locked!
-std::shared_ptr<Backend>
+std::unique_ptr<Backend>
 DatabaseRotatingImp::rotateBackends(
-    std::shared_ptr <Backend> const& newBackend)
+    std::unique_ptr<Backend> newBackend)
 {
-    std::shared_ptr <Backend> oldBackend = archiveBackend_;
-    archiveBackend_ = writableBackend_;
-    writableBackend_ = newBackend;
-
+    auto oldBackend {std::move(archiveBackend_)};
+    archiveBackend_ = std::move(writableBackend_);
+    writableBackend_ = std::move(newBackend);
     return oldBackend;
 }
 
