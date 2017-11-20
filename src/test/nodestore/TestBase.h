@@ -23,16 +23,30 @@
 #include <ripple/nodestore/Database.h>
 #include <ripple/basics/random.h>
 #include <ripple/basics/StringUtilities.h>
+#include <ripple/beast/type_name.h>
 #include <ripple/beast/unit_test.h>
 #include <ripple/beast/utility/rngfill.h>
+#include <ripple/beast/utility/temp_dir.h>
 #include <ripple/beast/xor_shift_engine.h>
+#include <ripple/core/ConfigSections.h>
 #include <ripple/nodestore/Backend.h>
+#include <ripple/nodestore/DummyScheduler.h>
+#include <ripple/nodestore/Manager.h>
 #include <ripple/nodestore/Types.h>
+#include <ripple/nodestore/DatabaseShard.h>
+#include <ripple/nodestore/impl/DatabaseShardImp.h>
+#include <ripple/nodestore/impl/Shard.h>
 #include <boost/algorithm/string.hpp>
 #include <iomanip>
+#include <algorithm>
+#include <typeinfo>
+#include <test/jtx.h>
 
 namespace ripple {
 namespace NodeStore {
+
+using SeqItem = std::pair <std::uint32_t, std::shared_ptr<NodeObject>>;
+using SeqBatch = std::vector <SeqItem>;
 
 /** Binary function that satisfies the strict-weak-ordering requirement.
 
@@ -44,23 +58,33 @@ namespace NodeStore {
 struct LessThan
 {
     bool
-    operator()(
-        std::shared_ptr<NodeObject> const& lhs,
-            std::shared_ptr<NodeObject> const& rhs) const noexcept
+    operator()(SeqItem const& lhs, SeqItem const& rhs) const noexcept
     {
-        return lhs->getHash () < rhs->getHash ();
+        return lhs.second->getHash () < rhs.second->getHash ();
     }
 };
 
 /** Returns `true` if objects are identical. */
 inline
-bool isSame (std::shared_ptr<NodeObject> const& lhs,
+bool isSame (
+    std::shared_ptr<NodeObject> const& lhs,
     std::shared_ptr<NodeObject> const& rhs)
 {
     return
         (lhs->getType() == rhs->getType()) &&
         (lhs->getHash() == rhs->getHash()) &&
         (lhs->getData() == rhs->getData());
+}
+
+/** Returns `true` if SeqItems are identical. */
+inline
+bool isSame (
+    SeqItem const& lhs,
+    SeqItem const& rhs)
+{
+    return
+        lhs.first == rhs.first &&
+        isSame(lhs.second, rhs.second);
 }
 
 // Some common code for the unit tests
@@ -77,13 +101,13 @@ public:
 public:
     // Create a predictable batch of objects
     static
-    Batch createPredictableBatch(
+    SeqBatch createPredictableBatch(
         int numObjects, std::uint64_t seed)
     {
-        Batch batch;
+        SeqBatch batch;
         batch.reserve (numObjects);
 
-        beast::xor_shift_engine rng (seed);
+        beast::xor_shift_engine rng {seed};
 
         for (int i = 0; i < numObjects; ++i)
         {
@@ -106,15 +130,17 @@ public:
             beast::rngfill (blob.data(), blob.size(), rng);
 
             batch.push_back (
-                NodeObject::createObject(
-                    type, std::move(blob), hash));
+                std::make_pair(
+                    0u,
+                    NodeObject::createObject(
+                        type, std::move(blob), hash)));
         }
 
         return batch;
     }
 
     // Compare two batches for equality
-    static bool areBatchesEqual (Batch const& lhs, Batch const& rhs)
+    static bool areBatchesEqual (SeqBatch const& lhs, SeqBatch const& rhs)
     {
         bool result = true;
 
@@ -137,27 +163,19 @@ public:
         return result;
     }
 
-    // Store a batch in a backend
-    void storeBatch (Backend& backend, Batch const& batch)
-    {
-        for (int i = 0; i < batch.size (); ++i)
-        {
-            backend.store (batch [i]);
-        }
-    }
-
     // Get a copy of a batch in a backend
-    void fetchCopyOfBatch (Backend& backend, Batch* pCopy, Batch const& batch)
+    void fetchCopyOfBatch (
+        Backend& backend, SeqBatch* pCopy, SeqBatch const& batch)
     {
         pCopy->clear ();
         pCopy->reserve (batch.size ());
 
-        for (int i = 0; i < batch.size (); ++i)
+        for (auto const& b : batch)
         {
             std::shared_ptr<NodeObject> object;
 
             Status const status = backend.fetch (
-                batch [i]->getHash ().cbegin (), &object);
+                b.second->getHash ().cbegin (), &object);
 
             BEAST_EXPECT(status == ok);
 
@@ -165,58 +183,329 @@ public:
             {
                 BEAST_EXPECT(object != nullptr);
 
-                pCopy->push_back (object);
+                pCopy->push_back (std::make_pair (b.first, object));
             }
         }
     }
 
-    void fetchMissing(Backend& backend, Batch const& batch)
+    void fetchMissing(Backend& backend, SeqBatch const& batch)
     {
-        for (int i = 0; i < batch.size (); ++i)
+        for (auto const& b : batch)
         {
             std::shared_ptr<NodeObject> object;
 
             Status const status = backend.fetch (
-                batch [i]->getHash ().cbegin (), &object);
+                b.second->getHash ().cbegin (), &object);
 
             BEAST_EXPECT(status == notFound);
         }
     }
 
-    // Store all objects in a batch
-    static void storeBatch (Database& db, Batch const& batch)
+    void storeBatch(Backend& backend, SeqBatch& batch)
     {
-        for (int i = 0; i < batch.size (); ++i)
+        for (auto& b : batch)
         {
-            std::shared_ptr<NodeObject> const object (batch [i]);
+            backend.store (b.second);
+        }
+    }
+
+    // Store all objects in a batch
+    void storeBatch (Database& db, SeqBatch& batch)
+    {
+        for (auto& b : batch)
+        {
+            std::shared_ptr<NodeObject> const object (b.second);
 
             Blob data (object->getData ());
 
             db.store (object->getType (),
                       std::move (data),
                       object->getHash (),
-                      NodeStore::genesisSeq);
+                      b.first);
         }
+    }
+
+    void storeBatch (DatabaseShard&, SeqBatch&)
+    {
+        assert(false);
+    }
+
+    void storeBatch (
+        Backend&,
+        SeqBatch&,
+        beast::unit_test::suite&,
+        ripple::test::jtx::Env*)
+    {
+        assert(false);
+    }
+
+    void storeBatch (
+        Database&,
+        SeqBatch&,
+        beast::unit_test::suite&,
+        ripple::test::jtx::Env*)
+    {
+        assert(false);
+    }
+
+    void storeBatch (
+        DatabaseShard& db,
+        SeqBatch& batch,
+        beast::unit_test::suite& tc,
+        ripple::test::jtx::Env* penv)
+    {
+        std::uint32_t lastShardIndex {0u};
+        std::uint32_t id {0u};
+        int transitions {0};
+        bool gotGenesisShard {false};
+
+        for (auto& b : batch)
+        {
+            auto stat = db.prepare(db.ledgersPerShard() * 256);
+            if (! stat)
+                throw std::runtime_error("prepare failed");
+            auto seq = *stat;
+
+            if ((! gotGenesisShard) &&
+                    (db.seqToShardIndex(seq) == db.seqToShardIndex(genesisSeq)))
+            {
+                tc.log << "Got assigned genesis shard." << std::endl;
+                gotGenesisShard = true;
+            }
+
+            if (lastShardIndex != db.seqToShardIndex(seq))
+            {
+                tc.log << "Got assigned shard " << db.seqToShardIndex(seq)
+                    << " (" << seq << ")" << std::endl;
+                if (lastShardIndex != 0u)
+                    transitions++;
+                lastShardIndex = db.seqToShardIndex(seq);
+            }
+
+            std::shared_ptr<NodeObject> const object (b.second);
+
+            Blob data (object->getData ());
+
+            db.store (object->getType (),
+                      std::move (data),
+                      object->getHash (),
+                      seq);
+
+            Config config;
+            std::shared_ptr<Ledger> lger =
+                std::make_shared<Ledger> (
+                    seq,
+                    penv->app().timeKeeper().closeTime(),
+                    config,
+                    penv->app().family());
+            lger->stateMap().setLedgerSeq(seq);
+            lger->txMap().setLedgerSeq(seq);
+
+            id++;
+            auto sle = std::make_shared<SLE>(ltACCOUNT_ROOT, uint256(id));
+            sle->setFieldU32(sfSequence, 1);
+            lger->rawInsert(sle);
+            lger->stateMap().flushDirty(hotACCOUNT_NODE, seq);
+
+            lger->setImmutable(config);
+            db.setStored(lger);
+
+            b.first = seq;
+        }
+        auto expectedTransitions = (batch.size() - 1) / db.ledgersPerShard();
+        // the genesis shard is short (doesn't contain a full LPS) so there
+        // will be one extra shard seen if/when we get assigned the genesis
+        // shard.
+        if (gotGenesisShard)
+            expectedTransitions++;
+        std::stringstream msg;
+        msg << "saw " << transitions << " transitions, expected " <<
+            expectedTransitions;
+        BEAST_EXPECTS(transitions == expectedTransitions, msg.str());
     }
 
     // Fetch all the hashes in one batch, into another batch.
     static void fetchCopyOfBatch (Database& db,
-                                  Batch* pCopy,
-                                  Batch const& batch)
+                                  SeqBatch* pCopy,
+                                  SeqBatch const& batch)
     {
         pCopy->clear ();
         pCopy->reserve (batch.size ());
 
-        for (int i = 0; i < batch.size (); ++i)
+        for (auto& b : batch)
         {
             std::shared_ptr<NodeObject> object = db.fetch (
-                batch [i]->getHash (), 0);
+                b.second->getHash (), b.first);
 
             if (object != nullptr)
-                pCopy->push_back (object);
+                pCopy->push_back ( std::make_pair(b.first, object));
         }
     }
+
+
+    template <class T>
+    std::pair<
+        std::unique_ptr<T, std::function<void(T*)>>,
+        std::unique_ptr<ripple::test::jtx::Env>>
+    factory(
+        Scheduler&,
+        Stoppable&,
+        Section&,
+        beast::Journal);
+
+    template <class T>
+    void testNodeStore (std::string const& type,
+                        unsigned int numObjectsToTest = 2000,
+                        unsigned int ledgersPerShard = 16384u,
+                        std::uint64_t seedValue = 50u)
+    {
+        DummyScheduler scheduler;
+        RootStoppable parent ("TestRootStoppable");
+        beast::Journal j;
+
+        std::string klass = beast::type_name<T>();
+        auto pos = klass.find_last_of(':');
+        if (pos != std::string::npos)
+            klass = klass.substr(pos+1);
+        testcase << type << " Backend with <" << klass
+            << "> driver and " << numObjectsToTest << " objects";
+
+        beast::temp_dir node_db;
+        Section params;
+        params.set ("type", type);
+        params.set ("path", node_db.path());
+        if (std::is_same<T, DatabaseShard>::value)
+            params.set ("ledgers_per_shard", std::to_string(ledgersPerShard));
+
+        beast::xor_shift_engine rng {seedValue};
+
+        // Create a batch
+        auto batch = createPredictableBatch (numObjectsToTest, rng());
+
+        {
+            // Open the database
+            //std:pair<std::unique_ptr <T>, std::unique_ptr <ripple::test::jtx::Env>> fret =
+            auto fret =
+                factory<T>(scheduler, parent, params, j);
+
+            if (std::is_same<T, DatabaseShard>::value)
+                storeBatch (*fret.first, batch, *this, fret.second.get());
+            else
+                storeBatch (*fret.first, batch);
+
+            {
+                // Read it back in
+                SeqBatch copy;
+                fetchCopyOfBatch (*fret.first, &copy, batch);
+                BEAST_EXPECT(areBatchesEqual (batch, copy));
+            }
+
+            {
+                // Reorder and read the copy again
+                std::shuffle (
+                    batch.begin(),
+                    batch.end(),
+                    rng);
+                SeqBatch copy;
+                fetchCopyOfBatch (*fret.first, &copy, batch);
+                BEAST_EXPECT(areBatchesEqual (batch, copy));
+            }
+        }
+
+        if (type != "memory")
+        {
+            // Re-open the database without the ephemeral DB
+            //std:pair<std::unique_ptr <T>, std::unique_ptr <ripple::test::jtx::Env>> fret =
+            auto fret =
+                factory<T>(scheduler, parent, params, j);
+
+            // Read it back in
+            SeqBatch copy;
+            fetchCopyOfBatch (*fret.first, &copy, batch);
+
+            // Canonicalize the source and destination batches
+            std::sort (batch.begin (), batch.end (), LessThan{});
+            std::sort (copy.begin (), copy.end (), LessThan{});
+            BEAST_EXPECT(areBatchesEqual (batch, copy));
+        }
+    }
+
 };
+
+template <>
+inline
+std::pair<
+    std::unique_ptr<Backend, std::function<void(Backend*)>>,
+    std::unique_ptr<ripple::test::jtx::Env>>
+TestBase::factory(
+    Scheduler& scheduler,
+    Stoppable&,
+    Section& params,
+    beast::Journal j)
+{
+    auto p = Manager::instance().make_Backend (params, scheduler, j);
+    p->open();
+    return std::make_pair(
+       std::unique_ptr<Backend, std::function<void(Backend*)>>(
+            p.release(), [](Backend* p){delete p;}),
+        nullptr);
+}
+
+template <>
+inline
+std::pair<
+    std::unique_ptr<Database, std::function<void(Database*)>>,
+    std::unique_ptr<ripple::test::jtx::Env>>
+TestBase::factory(
+    Scheduler& scheduler,
+    Stoppable& parent,
+    Section& params,
+    beast::Journal j)
+{
+    auto p = Manager::instance().make_Database (
+        "test", scheduler, 2, parent, params, j);
+    return std::make_pair(
+        std::unique_ptr<Database, std::function<void(Database*)>>(
+            p.release(), [](Database* p){delete p;}),
+        nullptr);
+}
+
+template <>
+inline
+std::pair<
+    std::unique_ptr<DatabaseShard, std::function<void(DatabaseShard*)>>,
+    std::unique_ptr<ripple::test::jtx::Env>>
+TestBase::factory(
+    Scheduler& scheduler,
+    Stoppable& parent,
+    Section& params,
+    beast::Journal j)
+{
+    auto penv = std::make_unique<ripple::test::jtx::Env>(
+        *this, ripple::test::jtx::envconfig ([&params](std::unique_ptr<Config> cfg)
+        {
+            cfg->overwrite
+                (ConfigSection::shardDatabase (), "type",
+                 *params.get<std::string>("type"));
+            cfg->overwrite
+                (ConfigSection::shardDatabase (), "path",
+                 *params.get<std::string>("path"));
+            cfg->overwrite
+                (ConfigSection::shardDatabase (), "ledgers_per_shard",
+                 *params.get<std::string>("ledgers_per_shard"));
+            cfg->overwrite
+                (ConfigSection::shardDatabase (), "max_size_gb", "4");
+            return cfg;
+        }));
+
+    // yes, this is a no-op deleter. This is so that we can still return a
+    // unique_ptr type but we don't actually own this pointer, the Env does
+    // and will free it when it deletes via its own unique_ptr.
+    std::unique_ptr<DatabaseShard, std::function<void(DatabaseShard*)>> dp {
+        penv->app().getShardStore(), [](DatabaseShard*){} };
+
+    return std::make_pair (std::move(dp), std::move(penv));
+}
 
 }
 }
